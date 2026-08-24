@@ -113,12 +113,12 @@ db/migrations/
 ## Tests
 
 ```bash
-npm test           # unit + integration (125 tests across 19 files)
+npm test           # unit + integration (123 tests across 18 files)
 npm run test:watch # watch mode
 npm run lint
 ```
 
-The integration suite covers the full pipeline — webhook signature verification, idempotent inbound, mocked OpenAI tool-calling loop, server-side price revalidation on `create_order`, and the unavailable-item rejection path.
+The integration suite covers the full pipeline — webhook signature verification, idempotent inbound, mocked Gemini tool-calling loop, server-side price revalidation on `create_order`, and the unavailable-item rejection path.
 
 ## Operational notes
 
@@ -126,3 +126,20 @@ The integration suite covers the full pipeline — webhook signature verificatio
 - Money is stored as integer paisa. `formatBDT(123456)` → `"৳1,234"`.
 - The agent never invents prices or menu items. Every tool handler re-reads from the database.
 - An order is only created when the customer explicitly says yes to the summary and the agent calls `create_order({ confirm: true })`.
+
+## Test chat UI (internal)
+
+A small Next.js 16 + shadcn/ui page lives in `web/` and proxies calls to the Fastify backend. It bypasses the WhatsApp webhook — just type Bangla or English and watch the agent respond. Tool calls and the current cart are visible on the right side.
+
+Run both servers together:
+
+```bash
+npm run dev          # Fastify on :3000 + Next.js on :3001
+# or separately:
+npm run dev:api      # Fastify on :3000
+npm run dev:web      # Next.js on :3001
+```
+
+Open <http://localhost:3001> in a browser. The phone field defaults to a fresh customer; each tab keeps its own chat in localStorage.
+
+The UI calls `POST /api/chat` on the Fastify backend. The backend persists the inbound text + outbound reply to the same `messages` table the webhook uses, so the conversation history survives a webhook roundtrip too.

@@ -1,7 +1,9 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import cors from '@fastify/cors';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { registerWebhook } from './webhook/router.js';
+import { registerChatRoute } from './web/chatRoute.js';
 
 // Fastify's strict logger typing clashes with our pino logger. Use a loose
 // alias for the return type so we don't have to fight the type system.
@@ -37,7 +39,17 @@ async function buildAppRaw() {
   app.get('/healthz', async () => ({ ok: true }));
   app.get('/readyz', async () => ({ ok: true }));
 
-  await registerWebhook(app);
+  // CORS for the local Next.js UI in dev. Restrict to loopback so the chat
+  // route isn't reachable from arbitrary origins. Production should put the
+  // UI behind the same origin via the Next.js rewrite proxy.
+  await app.register(cors, {
+    origin: ['http://127.0.0.1:3001', 'http://localhost:3001'],
+    methods: ['POST', 'GET', 'OPTIONS'],
+    credentials: false,
+  });
+
+  await registerWebhook(app as never);
+  await registerChatRoute(app as never);
 
   return app;
 }
