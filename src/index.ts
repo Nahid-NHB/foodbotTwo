@@ -2,8 +2,11 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import db from './db/client.js';
+import { redis } from './redis/client.js';
 import { registerWebhook } from './webhook/router.js';
 import { registerChatRoute } from './web/chatRoute.js';
+import { registerAdminRoutes } from './admin/dlq.js';
 
 // Fastify's strict logger typing clashes with our pino logger. Use a loose
 // alias for the return type so we don't have to fight the type system.
@@ -37,7 +40,31 @@ async function buildAppRaw() {
   );
 
   app.get('/healthz', async () => ({ ok: true }));
-  app.get('/readyz', async () => ({ ok: true }));
+
+  // Real readiness probe: SELECT 1 against Postgres + PING against Redis.
+  // Returns 503 with detail when either is unreachable so an orchestrator
+  // (k8s, ECS, load balancer) can take the pod out of rotation.
+  app.get('/readyz', async (_req, reply) => {
+    const checks: Record<string, { ok: boolean; error?: string }> = {
+      postgres: { ok: false },
+      redis: { ok: false },
+    };
+    try {
+      await db.query('SELECT 1');
+      checks.postgres.ok = true;
+    } catch (err) {
+      checks.postgres.error = err instanceof Error ? err.message : String(err);
+    }
+    try {
+      const pong = await redis.ping();
+      checks.redis.ok = pong === 'PONG';
+      if (!checks.redis.ok) checks.redis.error = `unexpected reply: ${pong}`;
+    } catch (err) {
+      checks.redis.error = err instanceof Error ? err.message : String(err);
+    }
+    const allOk = Object.values(checks).every((c) => c.ok);
+    return reply.code(allOk ? 200 : 503).send({ ok: allOk, checks });
+  });
 
   // CORS for the local Next.js UI in dev. Restrict to loopback so the chat
   // route isn't reachable from arbitrary origins. Production should put the
@@ -50,6 +77,7 @@ async function buildAppRaw() {
 
   await registerWebhook(app as never);
   await registerChatRoute(app as never);
+  await registerAdminRoutes(app as never);
 
   return app;
 }
