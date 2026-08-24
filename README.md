@@ -6,7 +6,7 @@ Voice-first WhatsApp ordering assistant for a Bangladeshi restaurant. Customers 
 
 ## Stack
 
-Node 20, TypeScript (strict), Fastify, PostgreSQL 16, Redis 7, BullMQ, Google Gemini 2.0 Flash (audio + chat + function calling), zod, pino, Vitest.
+Node 20, TypeScript (strict), Fastify, PostgreSQL 16, Redis 7, BullMQ, Google Gemini 3.6 Flash (audio + chat + function calling), zod, pino, Vitest.
 
 ## Setup
 
@@ -113,19 +113,40 @@ db/migrations/
 ## Tests
 
 ```bash
-npm test           # unit + integration (123 tests across 18 files)
+npm test           # unit + integration (167 tests across 25 files)
 npm run test:watch # watch mode
 npm run lint
 ```
 
 The integration suite covers the full pipeline — webhook signature verification, idempotent inbound, mocked Gemini tool-calling loop, server-side price revalidation on `create_order`, and the unavailable-item rejection path.
 
+## Deploy (production)
+
+```bash
+docker compose up --build              # boots Postgres + Redis + app
+docker compose --profile seed up       # also seeds menu data on first install
+```
+
+The `migrate` service runs idempotently before `app` starts (a migration failure aborts the stack). The `app` container's healthcheck gates load balancers: it calls `GET /healthz`, which returns 503 when any BullMQ worker heartbeat is missing or any dependency is unreachable.
+
+For production:
+
+```bash
+export ADMIN_BASIC_AUTH_PASS="$(openssl rand -hex 24)"
+export NODE_ENV=production
+docker compose up --build -d
+```
+
+API documentation lives at `/docs` (Swagger UI) once the app is running.
+
 ## Operational notes
 
 - Dead-letter inspection: `GET /admin/queues/dlq` (basic auth).
+- Interactive API docs: `GET /docs` (Swagger UI), `GET /docs/json` (raw OpenAPI).
 - Money is stored as integer paisa. `formatBDT(123456)` → `"৳1,234"`.
 - The agent never invents prices or menu items. Every tool handler re-reads from the database.
 - An order is only created when the customer explicitly says yes to the summary and the agent calls `create_order({ confirm: true })`.
+- Public endpoints (`POST /webhook`, `POST /api/chat`) are rate-limited per-IP and per-phone via Redis. Override defaults with `RATELIMIT_WEBHOOK_PER_MIN` and `RATELIMIT_CHAT_PER_MIN`.
 
 ## Test chat UI (internal)
 
