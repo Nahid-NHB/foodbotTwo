@@ -131,6 +131,8 @@ The integration suite covers the full pipeline — webhook signature verificatio
 
 A small Next.js 16 + shadcn/ui page lives in `web/` and proxies calls to the Fastify backend. It bypasses the WhatsApp webhook — just type Bangla or English and watch the agent respond. Tool calls and the current cart are visible on the right side.
 
+![Test chat UI](public/images/image.png)
+
 Run both servers together:
 
 ```bash
