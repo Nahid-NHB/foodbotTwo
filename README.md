@@ -113,10 +113,12 @@ db/migrations/
 ## Tests
 
 ```bash
-npm test           # unit + integration
+npm test           # unit + integration (125 tests across 19 files)
 npm run test:watch # watch mode
 npm run lint
 ```
+
+The integration suite covers the full pipeline — webhook signature verification, idempotent inbound, mocked OpenAI tool-calling loop, server-side price revalidation on `create_order`, and the unavailable-item rejection path.
 
 ## Operational notes
 
