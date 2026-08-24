@@ -1,0 +1,16 @@
+node_modules
+coverage
+dist
+.git
+.github
+.vscode
+.idea
+.env
+.env.local
+*.log
+web/node_modules
+web/.next
+web/pu
+tests
+docs
+public
