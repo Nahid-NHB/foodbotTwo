@@ -5,7 +5,6 @@ import { openai, recordTokens, budgetExceeded } from './client.js';
 import { systemPrompt } from './prompts.js';
 import { toolDefinitions, runTool, type AgentContext } from './tools.js';
 import { ToolError, MenuItemNotFoundError, MenuItemUnavailableError } from '../common/errors.js';
-import * as ConversationService from '../conversation/service.js';
 
 const MAX_TOOL_ITERATIONS = 5;
 const HISTORY_WINDOW = 20;

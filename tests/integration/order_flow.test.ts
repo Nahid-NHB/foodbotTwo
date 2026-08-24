@@ -185,7 +185,6 @@ describe('end-to-end order flow', () => {
       `SELECT id, conversation_id, transcript FROM messages WHERE whatsapp_message_id = $1`,
       [wamid],
     );
-    const messageId = m[0]!.id;
     const conversationId = m[0]!.conversation_id;
     const customer = await findOrCreateByPhone(TEST_PHONE);
 
