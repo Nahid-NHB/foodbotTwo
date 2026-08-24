@@ -2,8 +2,8 @@
   "restaurant": {
     "key": "hungry_bird",
     "name": "Hungry Bird",
-    "whatsapp_phone_number_id": "REPLACE_WITH_PHONE_NUMBER_ID",
-    "whatsapp_business_account_id": "REPLACE_WITH_WABA_ID"
+    "whatsapp_phone_number_id": "123456789012345",
+    "whatsapp_business_account_id": "987654321098765"
   },
   "categories": [
     { "key": "burger", "name": "Burger", "sort_order": 1 },
