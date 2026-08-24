@@ -10,6 +10,7 @@ import { registerAdminRoutes } from './admin/dlq.js';
 import { requestIdHook } from './middleware/requestId.js';
 import { buildRateLimitHook } from './middleware/wireRateLimit.js';
 import { readWorkerHeartbeats } from './middleware/workerHeartbeat.js';
+import { registerOpenAPI } from './middleware/openapi.js';
 
 // Fastify's strict logger typing clashes with our pino logger. Use a loose
 // alias for the return type so we don't have to fight the type system.
@@ -42,6 +43,10 @@ async function buildAppRaw() {
     },
   );
 
+  // OpenAPI / Swagger UI. Must be registered BEFORE routes so route
+  // schemas get picked up by @fastify/swagger.
+  await registerOpenAPI(app as never);
+
   // Request-id propagation runs first so every subsequent log line in the
   // request lifecycle carries the correlation id.
   app.addHook('onRequest', requestIdHook);
@@ -61,7 +66,39 @@ async function buildAppRaw() {
   // Real readiness probe: SELECT 1 against Postgres + PING against Redis.
   // Returns 503 with detail when either is unreachable so an orchestrator
   // (k8s, ECS, load balancer) can take the pod out of rotation.
-  app.get('/readyz', async (_req, reply) => {
+  app.get('/readyz', {
+    schema: {
+      tags: ['system'],
+      summary: 'Readiness probe',
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            checks: {
+              type: 'object',
+              properties: {
+                postgres: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean' },
+                    error: { type: 'string' },
+                  },
+                },
+                redis: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean' },
+                    error: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (_req, reply) => {
     const checks: Record<string, { ok: boolean; error?: string }> = {
       postgres: { ok: false },
       redis: { ok: false },

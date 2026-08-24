@@ -18,6 +18,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   const a = app as unknown as {
     get: (
       url: string,
+      opts: unknown,
       handler: (req: FastifyRequest, reply: {
         code: (n: number) => { send: (b: unknown) => unknown };
         send: (b: unknown) => unknown;
@@ -25,7 +26,44 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     ) => void;
   };
 
-  a.get('/admin/queues/dlq', async (req, reply) => {
+  a.get('/admin/queues/dlq', {
+    schema: {
+      tags: ['admin'],
+      summary: 'List dead-letter jobs across all worker queues (basic auth)',
+      querystring: {
+        type: 'object',
+        properties: {
+          limit: {
+            type: 'string',
+            description: 'Max jobs per queue (default 50, max 200)',
+          },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            total: { type: 'integer' },
+            queues: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  queue: { type: 'string' },
+                  count: { type: 'integer' },
+                  jobs: { type: 'array' },
+                },
+              },
+            },
+          },
+        },
+        401: {
+          type: 'object',
+          properties: { error: { type: 'string' } },
+        },
+      },
+    },
+  }, async (req, reply) => {
     if (!checkBasicAuth(req.headers.authorization)) {
       reply.code(401);
       reply.header('WWW-Authenticate', 'Basic realm="admin"');

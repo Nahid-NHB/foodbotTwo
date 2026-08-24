@@ -50,7 +50,49 @@ export async function registerChatRoute(app: FastifyInstance): Promise<void> {
 
   a.post(
     '/api/chat',
-    {},
+    {
+      schema: {
+        tags: ['chat'],
+        summary: 'Test chat — run a single agent turn synchronously',
+        body: {
+          type: 'object',
+          required: ['phone', 'userText'],
+          properties: {
+            phone: {
+              type: 'string',
+              description: 'E.164 phone number, e.g. +8801700009999',
+            },
+            userText: {
+              type: 'string',
+              description: "The user's message text",
+              minLength: 1,
+              maxLength: 2000,
+            },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              reply: { type: 'string' },
+              toolCalls: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    args: { type: 'object' },
+                    result: { type: 'string' },
+                  },
+                },
+              },
+              cart: { type: 'array' },
+              tokensUsed: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
     async (req, reply) => {
       const log = (req as { log?: typeof logger } & { id?: string }).log
         ?? logger;
