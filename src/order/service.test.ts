@@ -24,6 +24,7 @@ import {
   MenuItemNotFoundError,
   MenuItemUnavailableError,
   OrderNotConfirmableError,
+  OrderNotFoundError,
   InvalidStateTransitionError,
 } from '../common/errors.js';
 import type { OrderItemSnapshot } from './types.js';
@@ -183,5 +184,33 @@ describe('order service (integration)', () => {
   it('MenuItemUnavailableError is exported and typed', () => {
     const e = new MenuItemUnavailableError('Coke');
     expect(e.code).toBe('menu_item_unavailable');
+  });
+
+  it('getById throws OrderNotFoundError for unknown id', async () => {
+    await expect(getById('00000000-0000-4000-8000-000000000000')).rejects.toBeInstanceOf(
+      OrderNotFoundError,
+    );
+  });
+
+  it('confirm rejects negative delivery_fee_paisa', async () => {
+    await expect(
+      confirm({
+        restaurant_id: restaurantId,
+        customer_id: customerId,
+        items: [line()],
+        delivery_fee_paisa: -1,
+      }),
+    ).rejects.toBeInstanceOf(OrderNotConfirmableError);
+  });
+
+  it('confirm rejects non-finite delivery_fee_paisa', async () => {
+    await expect(
+      confirm({
+        restaurant_id: restaurantId,
+        customer_id: customerId,
+        items: [line()],
+        delivery_fee_paisa: Number.NaN,
+      }),
+    ).rejects.toBeInstanceOf(OrderNotConfirmableError);
   });
 });

@@ -60,6 +60,7 @@ describe('tool handlers (integration)', () => {
     const names = toolDefinitions.map((t) => t.name);
     expect(names).toContain('check_item_availability');
     expect(names).toContain('cancel_order');
+    expect(names).toContain('get_order_status');
   });
 
   // ---------- check_item_availability ----------
@@ -170,6 +171,76 @@ describe('tool handlers (integration)', () => {
       runTool(
         'cancel_order',
         { order_id: orderId, reason: 'দ্বিতীয় বাতিল' },
+        { conversationId, customerId, restaurantId },
+      ),
+    ).rejects.toThrow();
+  });
+
+  // ---------- get_order_status ----------
+
+  it('get_order_status: returns the most recent order when no order_id is passed', async () => {
+    // Place a fresh order; "most recent" is whichever order was last inserted.
+    const orderId = await createPendingOrder();
+
+    const result = await runTool(
+      'get_order_status',
+      {},
+      { conversationId, customerId, restaurantId },
+    );
+    const parsed = JSON.parse(result);
+    // Should match one of this customer's orders. The DB-level ORDER BY
+    // created_at DESC means it'll be the most recent one we just placed.
+    expect([orderId, ...[]]).toContain(parsed.order_id);
+    expect(parsed.state).toBeTruthy();
+    expect(parsed.total_paisa).toBeGreaterThan(0);
+    expect(parsed.total_display).toMatch(/^৳/);
+    expect(Array.isArray(parsed.items)).toBe(true);
+  });
+
+  it('get_order_status: returns the named order when order_id is passed', async () => {
+    const orderId = await createPendingOrder();
+
+    const result = await runTool(
+      'get_order_status',
+      { order_id: orderId },
+      { conversationId, customerId, restaurantId },
+    );
+    const parsed = JSON.parse(result);
+    expect(parsed.order_id).toBe(orderId);
+    expect(parsed.state).toBe('pending');
+  });
+
+  it('get_order_status: rejects an order owned by a different customer', async () => {
+    const orderId = await createPendingOrder();
+    const other = await findOrCreateByPhone('+8801700006666');
+    const otherConv = await ConversationService.getOrCreate(other.id, restaurantId);
+
+    await expect(
+      runTool(
+        'get_order_status',
+        { order_id: orderId },
+        { conversationId: otherConv.id, customerId: other.id, restaurantId },
+      ),
+    ).rejects.toThrow(/not owned|order_not_found/);
+  });
+
+  it('get_order_status: returns a friendly error when the customer has no orders', async () => {
+    const other = await findOrCreateByPhone('+8801700005555');
+    const otherConv = await ConversationService.getOrCreate(other.id, restaurantId);
+    await expect(
+      runTool(
+        'get_order_status',
+        {},
+        { conversationId: otherConv.id, customerId: other.id, restaurantId },
+      ),
+    ).rejects.toThrow(/has no orders|order_not_found/);
+  });
+
+  it('get_order_status: rejects non-uuid order_id', async () => {
+    await expect(
+      runTool(
+        'get_order_status',
+        { order_id: 'not-a-uuid' },
         { conversationId, customerId, restaurantId },
       ),
     ).rejects.toThrow();

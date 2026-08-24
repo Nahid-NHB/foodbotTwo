@@ -74,6 +74,18 @@ export class OrderNotConfirmableError extends AppError {
   }
 }
 
+export class OrderNotFoundError extends AppError {
+  constructor(id: string, cause?: unknown) {
+    super({
+      code: 'order_not_found',
+      message: `Order not found: ${id}`,
+      customerMessage: 'অর্ডার খুঁজে পাওয়া যায়নি।',
+      status: 404,
+      cause,
+    });
+  }
+}
+
 export class InvalidStateTransitionError extends AppError {
   constructor(from: string, to: string, cause?: unknown) {
     super({

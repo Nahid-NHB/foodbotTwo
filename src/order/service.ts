@@ -2,6 +2,7 @@ import db from '../db/client.js';
 import { newId } from '../common/id.js';
 import {
   OrderNotConfirmableError,
+  OrderNotFoundError,
   MenuItemNotFoundError,
   MenuItemUnavailableError,
 } from '../common/errors.js';
@@ -108,6 +109,11 @@ async function revalidateItems(
  * double-check here as well.
  */
 export async function confirm(input: CreateOrderInput): Promise<Order> {
+  if (!Number.isFinite(input.delivery_fee_paisa) || input.delivery_fee_paisa < 0) {
+    throw new OrderNotConfirmableError(
+      `delivery_fee_paisa must be a non-negative integer (got ${input.delivery_fee_paisa})`,
+    );
+  }
   const items = await revalidateItems(input.restaurant_id, input.items);
   const { subtotal_paisa, total_paisa } = computeTotals(items, input.delivery_fee_paisa);
 
@@ -179,7 +185,7 @@ export async function getById(id: string): Promise<Order> {
     [id],
   );
   const o = rows[0];
-  if (!o) throw new OrderNotConfirmableError(`order not found: ${id}`);
+  if (!o) throw new OrderNotFoundError(id);
   return o;
 }
 

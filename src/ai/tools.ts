@@ -49,6 +49,11 @@ const CancelOrderSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
+// Either an explicit order_id, or omit to get the customer's most recent order.
+const GetOrderStatusSchema = z.object({
+  order_id: z.string().uuid().optional(),
+});
+
 const CustomerUpdateSchema = z.object({
   name: z.string().min(1).optional(),
   default_address: z.string().min(1).optional(),
@@ -247,6 +252,22 @@ export const toolDefinitions: FunctionDeclaration[] = [
       required: ['order_id', 'reason'],
     },
   },
+  {
+    name: 'get_order_status',
+    description:
+      "Look up the status of one of the customer's orders. Pass an order_id to fetch a specific order, or omit order_id to get the customer's most recent order. Returns the order state (pending/confirmed/preparing/ready/out_for_delivery/delivered/cancelled), items, totals, and timestamps. Only returns orders owned by the current customer.",
+    parameters: {
+      type: 'object',
+      properties: {
+        order_id: {
+          type: 'string',
+          format: 'uuid',
+          description: 'Optional. UUID of the order to look up. If omitted, returns the most recent order.',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ---------- handlers ----------
@@ -434,6 +455,59 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
       });
     },
   },
+  get_order_status: {
+    schema: GetOrderStatusSchema,
+    fn: async (args, ctx) => {
+      const parsed = GetOrderStatusSchema.parse(args);
+      let order;
+      if (parsed.order_id) {
+        try {
+          order = await OrderService.getById(parsed.order_id);
+        } catch {
+          // Treat not-found and ownership mismatch identically so we never
+          // leak existence of other customers' orders.
+          throw new ToolError(
+            'order_not_found',
+            'অর্ডার খুঁজে পাওয়া যায়নি।',
+            `get_order_status: order ${parsed.order_id} not found`,
+          );
+        }
+        if (order.customer_id !== ctx.customerId) {
+          throw new ToolError(
+            'order_not_found',
+            'অর্ডার খুঁজে পাওয়া যায়নি।',
+            `get_order_status: order ${parsed.order_id} not owned by customer ${ctx.customerId}`,
+          );
+        }
+      } else {
+        const recent = await OrderService.listByCustomer(ctx.customerId);
+        order = recent[0];
+        if (!order) {
+          throw new ToolError(
+            'order_not_found',
+            'আপনার কোনো অর্ডার নেই।',
+            `get_order_status: customer ${ctx.customerId} has no orders`,
+          );
+        }
+      }
+      return JSON.stringify({
+        order_id: order.id,
+        state: order.state,
+        items: order.items,
+        subtotal_paisa: order.subtotal_paisa,
+        delivery_fee_paisa: order.delivery_fee_paisa,
+        total_paisa: order.total_paisa,
+        total_display: formatBDT(order.total_paisa),
+        delivery_address: order.delivery_address,
+        payment_method: order.payment_method,
+        confirmed_at: order.confirmed_at,
+        cancelled_at: order.cancelled_at,
+        cancel_reason: order.cancel_reason,
+        created_at: order.created_at,
+        updated_at: order.updated_at,
+      });
+    },
+  },
 };
 
 export async function runTool(
@@ -458,6 +532,7 @@ export const _schemas = {
   CreateOrderSchema,
   CheckAvailabilitySchema,
   CancelOrderSchema,
+  GetOrderStatusSchema,
 };
 
 export const _handlers = handlers;
