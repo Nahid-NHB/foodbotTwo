@@ -8,6 +8,7 @@ import * as ConversationService from '../conversation/service.js';
 import { runConversationTurn } from '../ai/agent.js';
 import { findOrCreateByPhone } from '../customer/service.js';
 import { loggerForJob } from '../middleware/requestId.js';
+import { startWorkerHeartbeat } from '../middleware/workerHeartbeat.js';
 import db from '../db/client.js';
 
 // Transcribe job retry policy: 3 attempts total with exponential backoff.
@@ -230,6 +231,11 @@ export function createWorkers(): {
     { ...defaultWorkerOpts, connection: redis },
   );
 
+  // Start heartbeats so /healthz can reflect liveness.
+  const stopAudioHb = startWorkerHeartbeat('audio.transcribe');
+  const stopConvHb = startWorkerHeartbeat('conversation.process');
+  const stopSendHb = startWorkerHeartbeat('whatsapp.send');
+
   for (const w of [transcribeWorker, conversationWorker, sendWorker]) {
     w.on('failed', (job, err) => {
       const log = job ? loggerForJob(job, { name: w.name }) : logger;
@@ -253,6 +259,9 @@ export function createWorkers(): {
         conversationWorker.close(),
         sendWorker.close(),
       ]);
+      stopAudioHb();
+      stopConvHb();
+      stopSendHb();
     },
   };
 }

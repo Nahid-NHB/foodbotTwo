@@ -7,6 +7,9 @@ import { redis } from './redis/client.js';
 import { registerWebhook } from './webhook/router.js';
 import { registerChatRoute } from './web/chatRoute.js';
 import { registerAdminRoutes } from './admin/dlq.js';
+import { requestIdHook } from './middleware/requestId.js';
+import { buildRateLimitHook } from './middleware/wireRateLimit.js';
+import { readWorkerHeartbeats } from './middleware/workerHeartbeat.js';
 
 // Fastify's strict logger typing clashes with our pino logger. Use a loose
 // alias for the return type so we don't have to fight the type system.
@@ -39,7 +42,21 @@ async function buildAppRaw() {
     },
   );
 
-  app.get('/healthz', async () => ({ ok: true }));
+  // Request-id propagation runs first so every subsequent log line in the
+  // request lifecycle carries the correlation id.
+  app.addHook('onRequest', requestIdHook);
+  // Per-route rate limit; no-op when RATELIMIT_DISABLED=true (tests, local dev).
+  app.addHook('preHandler', buildRateLimitHook());
+
+  app.get('/healthz', async (_req, reply) => {
+    const workers = await readWorkerHeartbeats([
+      'audio.transcribe',
+      'conversation.process',
+      'whatsapp.send',
+    ]);
+    const allOk = Object.values(workers).every((w) => w.ok);
+    return reply.code(allOk ? 200 : 503).send({ ok: allOk, workers });
+  });
 
   // Real readiness probe: SELECT 1 against Postgres + PING against Redis.
   // Returns 503 with detail when either is unreachable so an orchestrator
