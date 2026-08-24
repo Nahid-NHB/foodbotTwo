@@ -149,18 +149,35 @@ async function main(): Promise<void> {
   const workers = createWorkers();
   logger.info('workers started');
 
-  const shutdown = async (signal: string) => {
+  // Graceful shutdown order:
+  //   1. app.close() — stop accepting HTTP, drain in-flight requests
+  //   2. workers.close() — finish current jobs, stop pulling new ones
+  //   3. closeQueues() — close BullMQ queues
+  //   4. closeRedis() — close Redis connection (heartbeats stop)
+  //   5. closeDb() — close Postgres pool
+  // If the chain takes > SHUTDOWN_TIMEOUT_MS, log fatal and exit(1) so
+  // orchestrators (k8s, ECS) don't have to wait for their SIGKILL.
+  const SHUTDOWN_TIMEOUT_MS = 25_000;
+
+  const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'shutting down');
+    const guard = setTimeout(() => {
+      logger.fatal({ timeoutMs: SHUTDOWN_TIMEOUT_MS }, 'shutdown exceeded timeout; forcing exit(1)');
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
     try {
-      await workers.close();
       await app.close();
-      const { closeDb } = await import('./db/client.js');
-      const { closeRedis } = await import('./redis/client.js');
+      await workers.close();
       const { closeQueues } = await import('./queue/index.js');
       await closeQueues();
+      const { closeRedis } = await import('./redis/client.js');
       await closeRedis();
+      const { closeDb } = await import('./db/client.js');
       await closeDb();
+    } catch (err) {
+      logger.error({ err }, 'shutdown error');
     } finally {
+      clearTimeout(guard);
       process.exit(0);
     }
   };
