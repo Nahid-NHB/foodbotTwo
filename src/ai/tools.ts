@@ -38,6 +38,17 @@ const GetItemSchema = z.object({
   item_id: z.string().uuid(),
 });
 
+const CheckAvailabilitySchema = z.object({
+  item_id: z.string().uuid(),
+  variant_id: z.string().uuid().optional(),
+  addon_ids: z.array(z.string().uuid()).optional(),
+});
+
+const CancelOrderSchema = z.object({
+  order_id: z.string().uuid(),
+  reason: z.string().min(1).max(500),
+});
+
 const CustomerUpdateSchema = z.object({
   name: z.string().min(1).optional(),
   default_address: z.string().min(1).optional(),
@@ -113,6 +124,20 @@ export const toolDefinitions: FunctionDeclaration[] = [
     parameters: {
       type: 'object',
       properties: { item_id: { type: 'string', format: 'uuid' } },
+      required: ['item_id'],
+    },
+  },
+  {
+    name: 'check_item_availability',
+    description:
+      'Verify a menu item (and optionally a variant / set of addons) is currently orderable. Use before adding to cart if the menu might be stale.',
+    parameters: {
+      type: 'object',
+      properties: {
+        item_id: { type: 'string', format: 'uuid' },
+        variant_id: { type: 'string', format: 'uuid' },
+        addon_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+      },
       required: ['item_id'],
     },
   },
@@ -204,6 +229,22 @@ export const toolDefinitions: FunctionDeclaration[] = [
         },
       },
       required: ['confirm'],
+    },
+  },
+  {
+    name: 'cancel_order',
+    description:
+      "Cancel one of the customer's pending or confirmed orders. The order must belong to the current customer; an order that has already been delivered or cancelled cannot be cancelled again. Provide a short Bangla reason like 'ঠিকানা ভুল হয়েছে' or 'বাতিল করতে চাই'.",
+    parameters: {
+      type: 'object',
+      properties: {
+        order_id: { type: 'string', format: 'uuid' },
+        reason: {
+          type: 'string',
+          description: 'Short Bangla reason for the cancellation. Required.',
+        },
+      },
+      required: ['order_id', 'reason'],
     },
   },
 ];
@@ -354,6 +395,45 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
       });
     },
   },
+  check_item_availability: {
+    schema: CheckAvailabilitySchema,
+    fn: async (args, ctx) => {
+      const parsed = CheckAvailabilitySchema.parse(args);
+      const result = await MenuService.checkAvailability(ctx.restaurantId, parsed.item_id, {
+        variantId: parsed.variant_id,
+        addonIds: parsed.addon_ids,
+      });
+      return JSON.stringify(result);
+    },
+  },
+  cancel_order: {
+    schema: CancelOrderSchema,
+    fn: async (args, ctx) => {
+      const parsed = CancelOrderSchema.parse(args);
+      // Verify ownership before any state change so we don't leak order
+      // existence to other customers.
+      const existing = await OrderService.getById(parsed.order_id);
+      if (existing.customer_id !== ctx.customerId) {
+        throw new ToolError(
+          'order_not_found',
+          'অর্ডার খুঁজে পাওয়া যায়নি।',
+          `cancel_order: order ${parsed.order_id} not owned by customer ${ctx.customerId}`,
+        );
+      }
+      const order = await OrderService.transition(
+        parsed.order_id,
+        'cancelled',
+        'customer',
+        parsed.reason,
+      );
+      return JSON.stringify({
+        order_id: order.id,
+        state: order.state,
+        cancelled_at: order.cancelled_at,
+        cancel_reason: order.cancel_reason,
+      });
+    },
+  },
 };
 
 export async function runTool(
@@ -376,6 +456,8 @@ export const _schemas = {
   GetItemSchema,
   CustomerUpdateSchema,
   CreateOrderSchema,
+  CheckAvailabilitySchema,
+  CancelOrderSchema,
 };
 
 export const _handlers = handlers;
