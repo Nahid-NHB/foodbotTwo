@@ -184,7 +184,8 @@ export async function seed(): Promise<void> {
         ],
       );
 
-      for (const v of item.variants) {
+      for (let vi = 0; vi < item.variants.length; vi++) {
+        const v = item.variants[vi]!;
         const variantId = ids.variant[`${item.key}:${v.key}`]!;
         await client.query(
           `INSERT INTO menu_item_variants (id, menu_item_id, name, price_paisa, sort_order)
@@ -193,7 +194,7 @@ export async function seed(): Promise<void> {
              name = EXCLUDED.name,
              price_paisa = EXCLUDED.price_paisa,
              updated_at = now()`,
-          [variantId, id, v.name, v.price_paisa, 0],
+          [variantId, id, v.name, v.price_paisa, vi],
         );
       }
     }

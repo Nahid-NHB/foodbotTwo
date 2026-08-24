@@ -14,14 +14,15 @@ pool.on('error', (err) => {
 
 export type QueryParams = ReadonlyArray<unknown>;
 
-export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
+async function _query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params?: QueryParams,
-): Promise<pg.QueryResult<T>> {
-  return pool.query<T>(text, params as unknown[]);
+): Promise<T[]> {
+  const result = await pool.query<T>(text, params as unknown[]);
+  return result.rows;
 }
 
-export async function withTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+async function _withTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -36,6 +37,23 @@ export async function withTransaction<T>(fn: (client: pg.PoolClient) => Promise<
   }
 }
 
-export async function closeDb(): Promise<void> {
+async function _close(): Promise<void> {
   await pool.end();
 }
+
+/**
+ * Default export is the only way to safely share DB helpers across modules
+ * in Vite/Vitest without hitting "query2 is not a function" module-graph
+ * collisions on named re-exports.
+ */
+export default {
+  query: _query,
+  withTransaction: _withTransaction,
+  close: _close,
+  pool,
+};
+
+// Also export individually for direct callers
+export const query = _query;
+export const closeDb = _close;
+export const withTransaction = _withTransaction;
