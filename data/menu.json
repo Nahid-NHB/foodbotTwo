@@ -1,0 +1,100 @@
+{
+  "restaurant": {
+    "key": "hungry_bird",
+    "name": "Hungry Bird",
+    "whatsapp_phone_number_id": "REPLACE_WITH_PHONE_NUMBER_ID",
+    "whatsapp_business_account_id": "REPLACE_WITH_WABA_ID"
+  },
+  "categories": [
+    { "key": "burger", "name": "Burger", "sort_order": 1 },
+    { "key": "pizza", "name": "Pizza", "sort_order": 2 },
+    { "key": "biryani", "name": "Biryani", "sort_order": 3 },
+    { "key": "drinks", "name": "Drinks", "sort_order": 4 }
+  ],
+  "items": [
+    {
+      "key": "chicken_burger",
+      "category_key": "burger",
+      "name": "Chicken Burger",
+      "description": "Juicy grilled chicken breast in a toasted bun with lettuce, tomato, and house sauce.",
+      "price_paisa": 18000,
+      "aliases": ["চিকেন বার্গার", "chicken burger", "ckn burger", "burger chicken", "মুরগির বার্গার"]
+    },
+    {
+      "key": "beef_burger",
+      "category_key": "burger",
+      "name": "Beef Burger",
+      "description": "Seasoned beef patty, cheese, pickles, and special sauce.",
+      "price_paisa": 22000,
+      "aliases": ["বিফ বার্গার", "beef burger", "bf burger", "গরুর মাংসের বার্গার"]
+    },
+    {
+      "key": "pizza",
+      "category_key": "pizza",
+      "name": "Pizza",
+      "description": "Hand-tossed pizza with mozzarella and tomato sauce. Choose your size.",
+      "price_paisa": 30000,
+      "aliases": ["পিজা", "pizza"],
+      "variants": [
+        { "key": "small", "name": "Small", "price_paisa": 30000 },
+        { "key": "medium", "name": "Medium", "price_paisa": 50000 },
+        { "key": "large", "name": "Large", "price_paisa": 70000 }
+      ]
+    },
+    {
+      "key": "chicken_biryani",
+      "category_key": "biryani",
+      "name": "Chicken Biryani",
+      "description": "Fragrant basmati rice with tender chicken pieces, served with raita.",
+      "price_paisa": 25000,
+      "aliases": ["চিকেন বিরিয়ানি", "chicken biryani", "ckn biryani", "মুরগির বিরিয়ানি"]
+    },
+    {
+      "key": "beef_biryani",
+      "category_key": "biryani",
+      "name": "Beef Biryani",
+      "description": "Spiced beef and basmati rice slow-cooked with potatoes.",
+      "price_paisa": 32000,
+      "aliases": ["বিফ বিরিয়ানি", "beef biryani", "bf biryani", "গরুর বিরিয়ানি"]
+    },
+    {
+      "key": "coke",
+      "category_key": "drinks",
+      "name": "Coke",
+      "description": "Chilled Coca-Cola, 330ml bottle.",
+      "price_paisa": 5000,
+      "aliases": ["কোক", "coke", "কোকাকোলা", "cola"]
+    },
+    {
+      "key": "water",
+      "category_key": "drinks",
+      "name": "Water",
+      "description": "500ml bottled mineral water.",
+      "price_paisa": 2000,
+      "aliases": ["পানি", "water", "mineral water", "মিনারেল ওয়াটার"]
+    }
+  ],
+  "addons": [
+    {
+      "key": "chicken_burger_cheese",
+      "item_key": "chicken_burger",
+      "name": "Extra Cheese",
+      "price_paisa": 3000,
+      "aliases": ["চিজ", "cheese", "এক্সট্রা চিজ", "extra cheese"]
+    },
+    {
+      "key": "beef_burger_cheese",
+      "item_key": "beef_burger",
+      "name": "Extra Cheese",
+      "price_paisa": 3000,
+      "aliases": ["চিজ", "cheese", "এক্সট্রা চিজ", "extra cheese"]
+    },
+    {
+      "key": "pizza_cheese",
+      "item_key": "pizza",
+      "name": "Extra Cheese",
+      "price_paisa": 4000,
+      "aliases": ["চিজ", "cheese", "এক্সট্রা চিজ", "extra cheese"]
+    }
+  ]
+}

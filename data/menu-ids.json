@@ -1,0 +1,30 @@
+{
+  "restaurant": {
+    "hungry_bird": "4d9e8f7e-2a33-4491-a891-9be0115bc700"
+  },
+  "category": {
+    "burger": "944b4242-e9e4-4469-979c-d408eddf773c",
+    "pizza": "c3514e4d-8eaf-453e-a57b-dd0cf8a37dda",
+    "biryani": "fc90745b-93d6-4848-8c2f-efe70a8ddd24",
+    "drinks": "d0e549d6-2bdb-4ed2-9a85-5e8294088e85"
+  },
+  "item": {
+    "chicken_burger": "b5614cca-b350-407e-8a96-fb4f924f64b2",
+    "beef_burger": "ef8e7f7d-5e7e-4127-bd3b-048053471c9f",
+    "pizza": "9f4fbde7-ca95-4d41-a754-451b2b08355d",
+    "chicken_biryani": "4bfd562e-e1e0-4f28-b4d2-8ee5c01ec26f",
+    "beef_biryani": "02583f59-e313-428d-8763-faf2a3b90e60",
+    "coke": "04681f9a-5dae-4e55-87c4-c7372172e542",
+    "water": "adf2c1b8-eda2-4326-af0d-2610d995cee2"
+  },
+  "variant": {
+    "pizza:small": "be9c3ae8-5b4f-4196-8e1c-7394ee1cae02",
+    "pizza:medium": "c3e9a98a-2513-4169-a1a2-cfb8ac4ae864",
+    "pizza:large": "b4a39bfd-05d5-4073-90ea-2858288eabbc"
+  },
+  "addon": {
+    "chicken_burger_cheese": "c45794b2-a629-4c6c-800d-2e5204941ff8",
+    "beef_burger_cheese": "aab3e16d-7781-42e5-acd9-baece4103b7d",
+    "pizza_cheese": "287781c8-e611-4f00-bfdc-141a4b14cd2e"
+  }
+}
