@@ -24,6 +24,13 @@ const schema = z.object({
 
   ADMIN_BASIC_AUTH_USER: z.string().default('admin'),
   ADMIN_BASIC_AUTH_PASS: z.string().default('changeme'),
+
+  RATELIMIT_WEBHOOK_PER_MIN: z.coerce.number().int().positive().default(30),
+  RATELIMIT_CHAT_PER_MIN: z.coerce.number().int().positive().default(20),
+  RATELIMIT_DISABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema>;

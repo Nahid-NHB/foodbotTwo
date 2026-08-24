@@ -21,6 +21,9 @@ const OPTIONAL_KEYS = [
   'RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA',
   'ADMIN_BASIC_AUTH_USER',
   'ADMIN_BASIC_AUTH_PASS',
+  'RATELIMIT_WEBHOOK_PER_MIN',
+  'RATELIMIT_CHAT_PER_MIN',
+  'RATELIMIT_DISABLED',
 ];
 
 function resetEnv() {
@@ -68,5 +71,22 @@ describe('config', () => {
     const mod = await loadConfig();
     expect(mod.config.PORT).toBe(8080);
     expect(mod.config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA).toBe(1234);
+  });
+
+  it('exposes rate-limit defaults', async () => {
+    const mod = await loadConfig();
+    expect(mod.config.RATELIMIT_WEBHOOK_PER_MIN).toBe(30);
+    expect(mod.config.RATELIMIT_CHAT_PER_MIN).toBe(20);
+    expect(mod.config.RATELIMIT_DISABLED).toBe(false);
+  });
+
+  it('coerces RATELIMIT_DISABLED=true and per-min caps', async () => {
+    process.env.RATELIMIT_DISABLED = 'true';
+    process.env.RATELIMIT_WEBHOOK_PER_MIN = '5';
+    process.env.RATELIMIT_CHAT_PER_MIN = '2';
+    const mod = await loadConfig();
+    expect(mod.config.RATELIMIT_DISABLED).toBe(true);
+    expect(mod.config.RATELIMIT_WEBHOOK_PER_MIN).toBe(5);
+    expect(mod.config.RATELIMIT_CHAT_PER_MIN).toBe(2);
   });
 });
