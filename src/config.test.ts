@@ -1,0 +1,73 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const REQUIRED_KEYS = [
+  'DATABASE_URL',
+  'REDIS_URL',
+  'OPENAI_API_KEY',
+  'WHATSAPP_TOKEN',
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_BUSINESS_ACCOUNT_ID',
+  'WHATSAPP_WEBHOOK_VERIFY_TOKEN',
+  'WHATSAPP_APP_SECRET',
+  'RESTAURANT_NAME',
+];
+
+const OPTIONAL_KEYS = [
+  'NODE_ENV',
+  'PORT',
+  'LOG_LEVEL',
+  'WHISPER_MODEL',
+  'LLM_MODEL',
+  'LLM_DAILY_TOKEN_BUDGET',
+  'RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA',
+  'ADMIN_BASIC_AUTH_USER',
+  'ADMIN_BASIC_AUTH_PASS',
+];
+
+function resetEnv() {
+  for (const k of [...REQUIRED_KEYS, ...OPTIONAL_KEYS]) delete process.env[k];
+}
+
+function setBaseEnv() {
+  resetEnv();
+  process.env.DATABASE_URL = 'postgres://foodbot:foodbot@localhost:5432/foodbot';
+  process.env.REDIS_URL = 'redis://localhost:6379';
+  process.env.OPENAI_API_KEY = 'sk-test';
+  process.env.WHATSAPP_TOKEN = 'tkn';
+  process.env.WHATSAPP_PHONE_NUMBER_ID = '123';
+  process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = '456';
+  process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN = 'verify';
+  process.env.WHATSAPP_APP_SECRET = 'secret';
+  process.env.RESTAURANT_NAME = 'Hungry Bird';
+}
+
+async function loadConfig() {
+  vi.resetModules();
+  return import('./config.js');
+}
+
+describe('config', () => {
+  beforeEach(() => setBaseEnv());
+  afterEach(() => resetEnv());
+
+  it('loads valid env with defaults', async () => {
+    const mod = await loadConfig();
+    expect(mod.config.RESTAURANT_NAME).toBe('Hungry Bird');
+    expect(mod.config.PORT).toBe(3000);
+    expect(mod.config.LOG_LEVEL).toBe('info');
+    expect(mod.config.LLM_MODEL).toBe('gpt-4o');
+  });
+
+  it('throws on missing required env', async () => {
+    delete process.env.OPENAI_API_KEY;
+    await expect(loadConfig()).rejects.toThrow(/OPENAI_API_KEY/);
+  });
+
+  it('coerces numeric env vars', async () => {
+    process.env.PORT = '8080';
+    process.env.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA = '1234';
+    const mod = await loadConfig();
+    expect(mod.config.PORT).toBe(8080);
+    expect(mod.config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA).toBe(1234);
+  });
+});
