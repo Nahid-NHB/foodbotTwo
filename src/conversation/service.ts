@@ -107,6 +107,9 @@ export async function transitionTo(
   );
   const current = rows[0];
   if (!current) throw new Error(`conversation not found: ${conversationId}`);
+  // Idempotent: transitioning to the same state is a no-op. This makes tools
+  // like add_to_cart safe to call repeatedly without bookkeeping.
+  if (current.state === to) return;
   assertCanTransitionConversation(current.state, to);
 
   await db.query(
