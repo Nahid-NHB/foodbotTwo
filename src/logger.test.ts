@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 const REQUIRED_KEYS = [
   'DATABASE_URL',
   'REDIS_URL',
-  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
   'WHATSAPP_TOKEN',
   'WHATSAPP_PHONE_NUMBER_ID',
   'WHATSAPP_BUSINESS_ACCOUNT_ID',
@@ -16,7 +16,6 @@ const OPTIONAL_KEYS = [
   'NODE_ENV',
   'PORT',
   'LOG_LEVEL',
-  'WHISPER_MODEL',
   'LLM_MODEL',
   'LLM_DAILY_TOKEN_BUDGET',
   'RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA',
@@ -28,7 +27,7 @@ function setBaseEnv() {
   for (const k of [...REQUIRED_KEYS, ...OPTIONAL_KEYS]) delete process.env[k];
   process.env.DATABASE_URL = 'postgres://foodbot:foodbot@localhost:5432/foodbot';
   process.env.REDIS_URL = 'redis://localhost:6379';
-  process.env.OPENAI_API_KEY = 'sk-test';
+  process.env.GEMINI_API_KEY = 'gemini-test';
   process.env.WHATSAPP_TOKEN = 'tkn';
   process.env.WHATSAPP_PHONE_NUMBER_ID = '123';
   process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = '456';

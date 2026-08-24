@@ -1,8 +1,8 @@
 /**
- * End-to-end test: webhook POST → conversation.process worker →
- * GPT agent (mocked) → customer confirms → order created in DB.
+ * End-to-end test: webhook POST → conversation worker →
+ * Gemini agent (mocked) → customer confirms → order created in DB.
  *
- * All external HTTP calls (OpenAI, WhatsApp) are mocked. Postgres and Redis
+ * All external HTTP calls (Gemini, WhatsApp) are mocked. Postgres and Redis
  * are real (local docker compose).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 vi.hoisted(() => {
   process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://foodbot:foodbot@127.0.0.1:5432/foodbot';
   process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
-  process.env.OPENAI_API_KEY = 'sk-test';
+  process.env.GEMINI_API_KEY = 'gemini-test';
   process.env.WHATSAPP_TOKEN = 'EAAtest';
   process.env.WHATSAPP_PHONE_NUMBER_ID = '12345';
   process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = '67890';
@@ -23,47 +23,14 @@ vi.hoisted(() => {
   process.env.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA = '6000';
 });
 
-// ---------- mock OpenAI ----------
-type CompletionRequest = { messages: Array<Record<string, unknown>> };
-type CompletionResponse = {
-  choices: Array<{
-    message: {
-      role: 'assistant';
-      content: string | null;
-      tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-    };
-  }>;
-  usage: { total_tokens: number };
-};
+import {
+  FakeGemini,
+  geminiTextReply,
+  geminiToolCall,
+} from '../../src/testUtils/fakeGemini.js';
+import { setFetchImpl } from '../../src/ai/gemini.js';
 
-const FakeOpenAI = vi.hoisted(() => {
-  class Fake {
-    static responses: CompletionResponse[] = [];
-    static requests: CompletionRequest[] = [];
-    chat: { completions: { create: (req: CompletionRequest) => Promise<CompletionResponse> } };
-    constructor() {
-      this.chat = {
-        completions: {
-          create: async (req: CompletionRequest) => {
-            Fake.requests.push(req);
-            const next = Fake.responses.shift();
-            if (!next) throw new Error('FakeOpenAI: no responses queued');
-            return next;
-          },
-        },
-      };
-    }
-  }
-  return Fake;
-});
-
-vi.mock('openai', () => ({ default: FakeOpenAI }));
-vi.mock('../../src/ai/client.js', () => ({
-  openai: new FakeOpenAI(),
-  recordTokens: () => undefined,
-  budgetExceeded: () => false,
-  tokensUsedToday: () => 0,
-}));
+setFetchImpl(FakeGemini.fetchImpl as typeof fetch);
 
 // ---------- mocks for outbound whatsapp ----------
 vi.mock('../../src/whatsapp/client.js', async () => {
@@ -126,12 +93,11 @@ describe('end-to-end order flow', () => {
   });
 
   beforeEach(async () => {
-    FakeOpenAI.responses = [];
-    FakeOpenAI.requests = [];
+    FakeGemini.responses = [];
+    FakeGemini.requests = [];
     vi.mocked(sendText).mockClear();
     await redis.flushdb();
     // Clean up orders from previous test to prevent leakage between tests.
-    // (Customer + messages are cleaned in afterAll; the orders reference them.)
     await db.query(
       `DELETE FROM orders WHERE customer_id IN (SELECT id FROM customers WHERE phone_e164 = $1)`,
       [TEST_PHONE],
@@ -180,7 +146,6 @@ describe('end-to-end order flow', () => {
     });
     expect(res.statusCode).toBe(200);
 
-    // Pull the message + conversation out of DB and run the agent turn.
     const m = await db.query<{ id: string; conversation_id: string; transcript: string }>(
       `SELECT id, conversation_id, transcript FROM messages WHERE whatsapp_message_id = $1`,
       [wamid],
@@ -202,114 +167,38 @@ describe('end-to-end order flow', () => {
 
   it('full flow: customer orders 2 chicken burgers, confirms → order in DB', async () => {
     // Turn 1: "2 ta chicken burger den" → model asks no clarification, just adds to cart
-    FakeOpenAI.responses = [
-      {
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [
-                {
-                  id: 'c1',
-                  type: 'function',
-                  function: {
-                    name: 'add_to_cart',
-                    arguments: JSON.stringify({
-                      menu_item_id: ids.item['chicken_burger'],
-                      quantity: 2,
-                    }),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-        usage: { total_tokens: 30 },
-      },
-      {
-        choices: [
-          { message: { role: 'assistant', content: 'ঠিক আছে, ২টা চিকেন বার্গার। আর কিছু লাগবে?' } },
-        ],
-        usage: { total_tokens: 20 },
-      },
+    FakeGemini.responses = [
+      geminiToolCall('add_to_cart', {
+        menu_item_id: ids.item['chicken_burger'],
+        quantity: 2,
+      }, 30),
+      geminiTextReply('ঠিক আছে, ২টা চিকেন বার্গার। আর কিছু লাগবে?', 20),
     ];
     const t1 = await postTextAndRun('2 ta chicken burger den');
     expect(t1.reply).toMatch(/চিকেন বার্গার/);
     expect(t1.toolCalls).toContain('add_to_cart');
 
     // Turn 2: "2 ta coke o den" → adds coke
-    FakeOpenAI.responses = [
-      {
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [
-                {
-                  id: 'c2',
-                  type: 'function',
-                  function: {
-                    name: 'add_to_cart',
-                    arguments: JSON.stringify({
-                      menu_item_id: ids.item['coke'],
-                      quantity: 2,
-                    }),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-        usage: { total_tokens: 25 },
-      },
-      {
-        choices: [{ message: { role: 'assistant', content: 'আর কিছু?' } }],
-        usage: { total_tokens: 15 },
-      },
+    FakeGemini.responses = [
+      geminiToolCall('add_to_cart', {
+        menu_item_id: ids.item['coke'],
+        quantity: 2,
+      }, 25),
+      geminiTextReply('আর কিছু?', 15),
     ];
     await postTextAndRun('2 ta coke o den');
 
     // Turn 3: "bas. order koro" → summarize
-    FakeOpenAI.responses = [
-      {
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [{ id: 'c3', type: 'function', function: { name: 'summarize_cart_for_confirmation', arguments: '{}' } }],
-            },
-          },
-        ],
-        usage: { total_tokens: 30 },
-      },
-      {
-        choices: [{ message: { role: 'assistant', content: 'অর্ডারটি কনফার্ম করবেন?' } }],
-        usage: { total_tokens: 10 },
-      },
+    FakeGemini.responses = [
+      geminiToolCall('summarize_cart_for_confirmation', {}, 30),
+      geminiTextReply('অর্ডারটি কনফার্ম করবেন?', 10),
     ];
     await postTextAndRun('bas. order koro');
 
     // Turn 4: "হ্যাঁ" → create_order
-    FakeOpenAI.responses = [
-      {
-        choices: [
-          {
-            message: {
-              role: 'assistant',
-              content: null,
-              tool_calls: [{ id: 'c4', type: 'function', function: { name: 'create_order', arguments: '{"confirm":true}' } }],
-            },
-          },
-        ],
-        usage: { total_tokens: 40 },
-      },
-      {
-        choices: [{ message: { role: 'assistant', content: 'অর্ডার গ্রহণ করা হয়েছে!' } }],
-        usage: { total_tokens: 15 },
-      },
+    FakeGemini.responses = [
+      geminiToolCall('create_order', { confirm: true }, 40),
+      geminiTextReply('অর্ডার গ্রহণ করা হয়েছে!', 15),
     ];
     await postTextAndRun('হ্যাঁ');
 
@@ -361,43 +250,13 @@ describe('end-to-end order flow', () => {
       ids.item['chicken_burger']!,
     ]);
     try {
-      FakeOpenAI.responses = [
-        {
-          choices: [
-            {
-              message: {
-                role: 'assistant',
-                content: null,
-                tool_calls: [
-                  {
-                    id: 'x1',
-                    type: 'function',
-                    function: {
-                      name: 'add_to_cart',
-                      arguments: JSON.stringify({
-                        menu_item_id: ids.item['chicken_burger'],
-                        quantity: 1,
-                      }),
-                    },
-                  },
-                ],
-              },
-            },
-          ],
-          usage: { total_tokens: 10 },
-        },
-        {
-          // After tool error, agent returns apology
-          choices: [
-            {
-              message: {
-                role: 'assistant',
-                content: 'দুঃখিত, এই মুহূর্তে Chicken Burger পাওয়া যাচ্ছে না।',
-              },
-            },
-          ],
-          usage: { total_tokens: 10 },
-        },
+      FakeGemini.responses = [
+        geminiToolCall('add_to_cart', {
+          menu_item_id: ids.item['chicken_burger'],
+          quantity: 1,
+        }, 10),
+        // After tool error, agent returns apology
+        geminiTextReply('দুঃখিত, এই মুহূর্তে Chicken Burger পাওয়া যাচ্ছে না।', 10),
       ];
       const result = await postTextAndRun('1 ta chicken burger den');
       expect(result.reply).toMatch(/পাওয়া যাচ্ছে না/);

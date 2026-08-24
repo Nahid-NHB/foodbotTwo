@@ -9,9 +9,8 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
 
-  OPENAI_API_KEY: z.string().min(1),
-  WHISPER_MODEL: z.string().default('whisper-1'),
-  LLM_MODEL: z.string().default('gpt-4o'),
+  GEMINI_API_KEY: z.string().min(1),
+  LLM_MODEL: z.string().default('gemini-2.0-flash'),
   LLM_DAILY_TOKEN_BUDGET: z.coerce.number().int().positive().default(500_000),
 
   WHATSAPP_TOKEN: z.string().min(1),

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const REQUIRED_KEYS = [
   'DATABASE_URL',
   'REDIS_URL',
-  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
   'WHATSAPP_TOKEN',
   'WHATSAPP_PHONE_NUMBER_ID',
   'WHATSAPP_BUSINESS_ACCOUNT_ID',
@@ -16,7 +16,6 @@ const OPTIONAL_KEYS = [
   'NODE_ENV',
   'PORT',
   'LOG_LEVEL',
-  'WHISPER_MODEL',
   'LLM_MODEL',
   'LLM_DAILY_TOKEN_BUDGET',
   'RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA',
@@ -32,7 +31,7 @@ function setBaseEnv() {
   resetEnv();
   process.env.DATABASE_URL = 'postgres://foodbot:foodbot@localhost:5432/foodbot';
   process.env.REDIS_URL = 'redis://localhost:6379';
-  process.env.OPENAI_API_KEY = 'sk-test';
+  process.env.GEMINI_API_KEY = 'gemini-test';
   process.env.WHATSAPP_TOKEN = 'tkn';
   process.env.WHATSAPP_PHONE_NUMBER_ID = '123';
   process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = '456';
@@ -55,12 +54,12 @@ describe('config', () => {
     expect(mod.config.RESTAURANT_NAME).toBe('Hungry Bird');
     expect(mod.config.PORT).toBe(3000);
     expect(mod.config.LOG_LEVEL).toBe('info');
-    expect(mod.config.LLM_MODEL).toBe('gpt-4o');
+    expect(mod.config.LLM_MODEL).toBe('gemini-2.0-flash');
   });
 
   it('throws on missing required env', async () => {
-    delete process.env.OPENAI_API_KEY;
-    await expect(loadConfig()).rejects.toThrow(/OPENAI_API_KEY/);
+    delete process.env.GEMINI_API_KEY;
+    await expect(loadConfig()).rejects.toThrow(/GEMINI_API_KEY/);
   });
 
   it('coerces numeric env vars', async () => {

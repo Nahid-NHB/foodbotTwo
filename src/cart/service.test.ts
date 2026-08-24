@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 vi.hoisted(() => {
   process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://foodbot:foodbot@127.0.0.1:5432/foodbot';
   process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
-  process.env.OPENAI_API_KEY = 'sk-test';
+  process.env.GEMINI_API_KEY = 'gemini-test';
   process.env.WHATSAPP_TOKEN = 'tkn';
   process.env.WHATSAPP_PHONE_NUMBER_ID = '123';
   process.env.WHATSAPP_BUSINESS_ACCOUNT_ID = '456';

@@ -12,5 +12,11 @@ export default defineConfig({
     testTimeout: 20_000,
     hookTimeout: 30_000,
     pool: 'forks',
+    // Tests share a real Postgres + Redis. Run sequentially so a flushdb in
+    // one file doesn't wipe another's data mid-test.
+    fileParallelism: false,
+    poolOptions: {
+      forks: { singleFork: true },
+    },
   },
 });

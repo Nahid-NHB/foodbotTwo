@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ChatCompletionTool } from 'openai/resources/chat/index.js';
+import type { FunctionDeclaration } from './gemini.js';
 import * as MenuService from '../menu/service.js';
 import * as CartService from '../cart/service.js';
 import * as CustomerService from '../customer/service.js';
@@ -88,156 +88,122 @@ function summaryText(
   return lines.join('\n');
 }
 
-// ---------- tool definitions (OpenAI schema) ----------
+// ---------- tool definitions (Gemini functionDeclarations) ----------
 
-export const toolDefinitions: ChatCompletionTool[] = [
+export const toolDefinitions: FunctionDeclaration[] = [
   {
-    type: 'function',
-    function: {
-      name: 'search_menu',
-      description:
-        'Search the menu. Returns up to 10 items with id, name, price (paisa), category. Use when the customer asks for a dish or to see the menu.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Search term — Bangla, Banglish, or English. Empty for full menu.',
-          },
+    name: 'search_menu',
+    description:
+      'Search the menu. Returns up to 10 items with id, name, price (paisa), category. Use when the customer asks for a dish or to see the menu.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search term — Bangla, Banglish, or English. Empty for full menu.',
         },
-        required: [],
       },
+      required: [],
     },
   },
   {
-    type: 'function',
-    function: {
-      name: 'get_item_details',
-      description:
-        'Get full item details including variants (Small/Medium/Large) and add-ons (Extra Cheese, etc).',
-      parameters: {
-        type: 'object',
-        properties: { item_id: { type: 'string', format: 'uuid' } },
-        required: ['item_id'],
-      },
+    name: 'get_item_details',
+    description:
+      'Get full item details including variants (Small/Medium/Large) and add-ons (Extra Cheese, etc).',
+    parameters: {
+      type: 'object',
+      properties: { item_id: { type: 'string', format: 'uuid' } },
+      required: ['item_id'],
     },
   },
   {
-    type: 'function',
-    function: {
-      name: 'add_to_cart',
-      description:
-        'Add an item to the cart. Prices are server-side; pass item id and quantity. The tool will look up current price and addons.',
-      parameters: {
-        type: 'object',
-        properties: {
-          menu_item_id: { type: 'string', format: 'uuid' },
-          quantity: { type: 'integer', minimum: 1 },
-          variant_id: { type: 'string', format: 'uuid' },
-          addon_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+    name: 'add_to_cart',
+    description:
+      'Add an item to the cart. Prices are server-side; pass item id and quantity. The tool will look up current price and addons.',
+    parameters: {
+      type: 'object',
+      properties: {
+        menu_item_id: { type: 'string', format: 'uuid' },
+        quantity: { type: 'integer', minimum: 1 },
+        variant_id: { type: 'string', format: 'uuid' },
+        addon_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+      },
+      required: ['menu_item_id', 'quantity'],
+    },
+  },
+  {
+    name: 'update_cart_item',
+    description: 'Change the quantity of an item already in the cart. Use quantity=0 to remove.',
+    parameters: {
+      type: 'object',
+      properties: {
+        menu_item_id: { type: 'string', format: 'uuid' },
+        variant_id: { type: 'string', format: 'uuid' },
+        quantity: { type: 'integer', minimum: 0 },
+      },
+      required: ['menu_item_id', 'quantity'],
+    },
+  },
+  {
+    name: 'remove_from_cart',
+    description: 'Remove an item entirely from the cart.',
+    parameters: {
+      type: 'object',
+      properties: {
+        menu_item_id: { type: 'string', format: 'uuid' },
+        variant_id: { type: 'string', format: 'uuid' },
+      },
+      required: ['menu_item_id'],
+    },
+  },
+  {
+    name: 'clear_cart',
+    description: 'Empty the cart.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'calculate_order_total',
+    description: 'Compute subtotal, delivery fee, and total in paisa. Read-only.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'summarize_cart_for_confirmation',
+    description:
+      'Produce the Bangla order summary text shown to the customer before they confirm. The summary includes all items, prices, delivery fee, and total. Use this BEFORE asking the customer to confirm.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_customer_information',
+    description: 'Read the customer profile (name, default address, payment method).',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'update_customer_information',
+    description:
+      'Update the customer profile. Only pass fields you want to change. Use when the customer provides name, address, or payment method.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        default_address: { type: 'string' },
+        payment_method: { type: 'string' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_order',
+    description:
+      'Create the confirmed order. ONLY call this after the customer has explicitly said yes/হ্যাঁ to the summary. The "confirm" argument MUST be exactly true. The server re-validates every line and recomputes prices; if anything is invalid this will error.',
+    parameters: {
+      type: 'object',
+      properties: {
+        confirm: {
+          type: 'boolean',
+          description: 'Must be exactly true to create the order. The server rejects false.',
         },
-        required: ['menu_item_id', 'quantity'],
       },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'update_cart_item',
-      description: 'Change the quantity of an item already in the cart. Use quantity=0 to remove.',
-      parameters: {
-        type: 'object',
-        properties: {
-          menu_item_id: { type: 'string', format: 'uuid' },
-          variant_id: { type: 'string', format: 'uuid' },
-          quantity: { type: 'integer', minimum: 0 },
-        },
-        required: ['menu_item_id', 'quantity'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'remove_from_cart',
-      description: 'Remove an item entirely from the cart.',
-      parameters: {
-        type: 'object',
-        properties: {
-          menu_item_id: { type: 'string', format: 'uuid' },
-          variant_id: { type: 'string', format: 'uuid' },
-        },
-        required: ['menu_item_id'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'clear_cart',
-      description: 'Empty the cart.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'calculate_order_total',
-      description: 'Compute subtotal, delivery fee, and total in paisa. Read-only.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'summarize_cart_for_confirmation',
-      description:
-        'Produce the Bangla order summary text shown to the customer before they confirm. The summary includes all items, prices, delivery fee, and total. Use this BEFORE asking the customer to confirm.',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_customer_information',
-      description: 'Read the customer profile (name, default address, payment method).',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'update_customer_information',
-      description:
-        'Update the customer profile. Only pass fields you want to change. Use when the customer provides name, address, or payment method.',
-      parameters: {
-        type: 'object',
-        properties: {
-          name: { type: 'string' },
-          default_address: { type: 'string' },
-          payment_method: { type: 'string' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_order',
-      description:
-        'Create the confirmed order. ONLY call this after the customer has explicitly said yes/হ্যাঁ to the summary. The "confirm" argument MUST be exactly true. The server re-validates every line and recomputes prices; if anything is invalid this will error.',
-      parameters: {
-        type: 'object',
-        properties: {
-          confirm: {
-            type: 'boolean',
-            enum: [true],
-            description: 'Must be exactly true to create the order.',
-          },
-        },
-        required: ['confirm'],
-      },
+      required: ['confirm'],
     },
   },
 ];

@@ -1,7 +1,7 @@
 import db from '../db/client.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { openai, recordTokens, budgetExceeded } from './client.js';
+import { generateContent, recordTokens, budgetExceeded, type GeminiContent, type GeminiPart, type GeminiRequest } from './gemini.js';
 import { systemPrompt } from './prompts.js';
 import { toolDefinitions, runTool, type AgentContext } from './tools.js';
 import { ToolError, MenuItemNotFoundError, MenuItemUnavailableError } from '../common/errors.js';
@@ -31,9 +31,9 @@ export interface AgentResult {
 }
 
 /**
- * Load last N messages. For MVP we only feed user-text history. Tool calls
- * and assistant text are not fed back into the model in Phase 1 to keep
- * token usage low; the model already has full context via the system prompt
+ * Load last N inbound messages. For MVP we only feed user-text history; tool
+ * calls and assistant text are not fed back into the model in Phase 1 to keep
+ * token usage low. The model already has full context via the system prompt
  * and the current cart.
  */
 async function loadHistory(conversationId: string): Promise<HistoryMessage[]> {
@@ -66,6 +66,47 @@ function safeErrorResult(err: unknown): string {
 }
 
 /**
+ * Build the initial Gemini `contents` from inbound history. History is fed as
+ * alternating user/model turns with text only.
+ */
+function historyToContents(history: HistoryMessage[], latestUserText: string): GeminiContent[] {
+  const contents: GeminiContent[] = [];
+  // Phase 1 simplification: history is just user messages. Each becomes a
+  // separate user turn. This isn't a faithful chat replay but it's what we
+  // shipped with the OpenAI version too.
+  for (const m of history) {
+    if (m.content.length > 0) {
+      contents.push({ role: 'user', parts: [{ text: m.content }] });
+    }
+  }
+  contents.push({ role: 'user', parts: [{ text: latestUserText }] });
+  return contents;
+}
+
+/**
+ * Read a Gemini response and extract:
+ * - any text content (concatenated across parts)
+ * - any function calls
+ */
+function parseResponse(parts: GeminiPart[] | undefined): {
+  text: string;
+  functionCalls: Array<{ name: string; args: Record<string, unknown> }>;
+} {
+  let text = '';
+  const functionCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  for (const part of parts ?? []) {
+    if (part.text) text += part.text;
+    if (part.functionCall) {
+      functionCalls.push({
+        name: part.functionCall.name,
+        args: part.functionCall.args ?? {},
+      });
+    }
+  }
+  return { text, functionCalls };
+}
+
+/**
  * Run one conversation turn. Up to MAX_TOOL_ITERATIONS tool-call rounds.
  */
 export async function runConversationTurn(input: AgentInput): Promise<AgentResult> {
@@ -85,59 +126,53 @@ export async function runConversationTurn(input: AgentInput): Promise<AgentResul
   }
 
   const history = await loadHistory(input.conversationId);
-  // Use a typed mutable array of chat messages.
-  const messages: Array<Record<string, unknown>> = [
-    { role: 'system', content: systemPrompt() },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    { role: 'user', content: input.userText },
-  ];
+  const contents = historyToContents(history, input.userText);
 
   const toolCallsLog: AgentResult['toolCalls'] = [];
   let totalTokens = 0;
   let finalReply = '';
 
   for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-    const response = await openai.chat.completions.create({
-      model: config.LLM_MODEL,
-      // Cast because OpenAI's strict types refuse our mutable array shape.
-      messages: messages as never,
-      tools: toolDefinitions,
-      tool_choice: 'auto',
-      temperature: 0.2,
-    });
-    totalTokens += response.usage?.total_tokens ?? 0;
-    recordTokens(response.usage?.total_tokens ?? 0);
+    const req: GeminiRequest = {
+      systemInstruction: { parts: [{ text: systemPrompt() }] },
+      contents,
+      tools: [{ functionDeclarations: toolDefinitions }],
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+      generationConfig: { temperature: 0.2 },
+    };
 
-    const choice = response.choices[0];
-    if (!choice) break;
-    const msg = choice.message;
+    const response = await generateContent(req);
+    totalTokens += response.usageMetadata?.totalTokenCount ?? 0;
+    recordTokens(response.usageMetadata?.totalTokenCount ?? 0);
 
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      // Persist assistant message with tool_calls (model expects this for round-trip).
-      messages.push({
-        role: 'assistant',
-        content: msg.content ?? '',
-        tool_calls: msg.tool_calls,
+    const candidate = response.candidates?.[0];
+    if (!candidate) break;
+
+    const { text, functionCalls } = parseResponse(candidate.content?.parts);
+
+    if (functionCalls.length > 0) {
+      // Push the model's tool-call turn back into history verbatim.
+      contents.push({
+        role: 'model',
+        parts: candidate.content?.parts ?? [],
       });
 
-      for (const tc of msg.tool_calls) {
-        const name = tc.function.name;
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(tc.function.arguments);
-        } catch {
-          args = {};
-        }
-        const result = await runTool(name, args, ctx).catch(safeErrorResult);
-        toolCallsLog.push({ name, args, result });
-        messages.push({ role: 'tool', content: result, tool_call_id: tc.id, name });
+      // Execute each tool call and append a functionResponse part to the
+      // next user turn. Gemini requires tool responses under role: 'user'.
+      const responseParts: GeminiPart[] = [];
+      for (const fc of functionCalls) {
+        const result = await runTool(fc.name, fc.args, ctx).catch(safeErrorResult);
+        toolCallsLog.push({ name: fc.name, args: fc.args, result });
+        responseParts.push({
+          functionResponse: { name: fc.name, response: parseToolResult(result) },
+        });
       }
+      contents.push({ role: 'user', parts: responseParts });
       continue;
     }
 
-    // No tool calls — this is the final reply.
-    finalReply = msg.content ?? '';
-    messages.push({ role: 'assistant', content: finalReply });
+    // No tool calls — final text reply.
+    finalReply = text;
     break;
   }
 
@@ -148,4 +183,21 @@ export async function runConversationTurn(input: AgentInput): Promise<AgentResul
   return { reply: finalReply, toolCalls: toolCallsLog, totalTokens };
 }
 
-export const __test = { loadHistory };
+/**
+ * Gemini functionResponse.response must be a JSON object, not a string.
+ * Our tool handlers already return JSON strings; parse them safely so the
+ * model sees structured data.
+ */
+function parseToolResult(result: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(result);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return { value: parsed };
+  } catch {
+    return { text: result };
+  }
+}
+
+export const __test = { loadHistory, historyToContents, parseResponse, parseToolResult };

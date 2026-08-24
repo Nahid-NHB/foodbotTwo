@@ -1,7 +1,7 @@
 import { Queue, Worker, type Processor, type WorkerOptions } from 'bullmq';
 import { redis } from '../redis/client.js';
 import { logger } from '../logger.js';
-import { transcribe } from '../speech/whisper.js';
+import { transcribe } from '../speech/transcribe.js';
 import { resolveMediaUrl, downloadMedia, sendText } from '../whatsapp/client.js';
 import * as ConversationService from '../conversation/service.js';
 import { runConversationTurn } from '../ai/agent.js';

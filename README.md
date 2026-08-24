@@ -6,7 +6,7 @@ Voice-first WhatsApp ordering assistant for a Bangladeshi restaurant. Customers 
 
 ## Stack
 
-Node 20, TypeScript (strict), Fastify, PostgreSQL 16, Redis 7, BullMQ, OpenAI gpt-4o + whisper-1, zod, pino, Vitest.
+Node 20, TypeScript (strict), Fastify, PostgreSQL 16, Redis 7, BullMQ, Google Gemini 2.0 Flash (audio + chat + function calling), zod, pino, Vitest.
 
 ## Setup
 
@@ -14,7 +14,7 @@ Node 20, TypeScript (strict), Fastify, PostgreSQL 16, Redis 7, BullMQ, OpenAI gp
 
 - Node 20+
 - Docker + Docker Compose
-- An OpenAI API key
+- A Google Gemini API key (free tier works: https://aistudio.google.com/apikey)
 - A Meta WhatsApp Business account with a verified phone number
 
 ### 2. Install dependencies
@@ -27,7 +27,7 @@ npm install
 
 Copy `.env.example` → `.env` and fill in:
 
-- `OPENAI_API_KEY`
+- `GEMINI_API_KEY` (get a free key at https://aistudio.google.com/apikey)
 - `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_ACCOUNT_ID`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`
 - Anything else that needs overriding
 
