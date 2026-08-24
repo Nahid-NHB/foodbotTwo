@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: foodbot
+          POSTGRES_USER: foodbot
+          POSTGRES_PASSWORD: foodbot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U foodbot -d foodbot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://foodbot:foodbot@127.0.0.1:5432/foodbot
+      REDIS_URL: redis://127.0.0.1:6379
+      GEMINI_API_KEY: ci-test
+      WHATSAPP_TOKEN: ci-token
+      WHATSAPP_PHONE_NUMBER_ID: '12345'
+      WHATSAPP_BUSINESS_ACCOUNT_ID: '67890'
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: verify
+      WHATSAPP_APP_SECRET: secret
+      RESTAURANT_NAME: Hungry Bird
+      ADMIN_BASIC_AUTH_USER: admin
+      ADMIN_BASIC_AUTH_PASS: secret-pass
+      RATELIMIT_DISABLED: 'true'
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run migrate
+      - run: npm run seed
+      - run: npm test
