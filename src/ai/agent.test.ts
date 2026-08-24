@@ -106,9 +106,11 @@ describe('AI agent (integration with mocked OpenAI)', () => {
     await closeRedis();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     FakeOpenAI.responses = [];
     FakeOpenAI.requests = [];
+    // Clear any leftover cart state
+    await ConversationService.clearCart(conversationId);
   });
 
   it('systemPrompt mentions the restaurant name and ৳ rule', () => {
