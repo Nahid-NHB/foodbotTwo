@@ -108,12 +108,13 @@ export async function registerWebhook(app: any): Promise<void> {
     }
 
     for (const entry of payload.entry) {
+      const reqId = (req as { id?: string }).id ?? '';
       for (const change of entry.changes ?? []) {
         const value = change.value;
         if (!value || !value.messages) continue;
         for (const m of value.messages) {
-          await handleInbound(m, restaurant.id).catch((err) => {
-            logger.error({ err, wamid: m.id }, 'failed to handle inbound message');
+          await handleInbound(m, restaurant.id, reqId).catch((err) => {
+            logger.error({ err, wamid: m.id, reqId }, 'failed to handle inbound message');
           });
         }
       }
@@ -123,7 +124,7 @@ export async function registerWebhook(app: any): Promise<void> {
   });
 }
 
-async function handleInbound(m: WebhookMessage, restaurantId: string): Promise<void> {
+async function handleInbound(m: WebhookMessage, restaurantId: string, reqId: string): Promise<void> {
   // Idempotency on whatsapp_message_id. If already inserted, skip.
   const phoneE164 = m.from.startsWith('+') ? m.from : `+${m.from}`;
   const customer = await findOrCreateByPhone(phoneE164);
@@ -138,7 +139,7 @@ async function handleInbound(m: WebhookMessage, restaurantId: string): Promise<v
   );
   const inserted = ins[0];
   if (!inserted) {
-    logger.info({ wamid: m.id }, 'duplicate inbound — skipping');
+    logger.info({ wamid: m.id, reqId }, 'duplicate inbound — skipping');
     return;
   }
   const messageId = inserted.id;
@@ -154,6 +155,7 @@ async function handleInbound(m: WebhookMessage, restaurantId: string): Promise<v
       customerId: customer.id,
       restaurantId,
       whatsappPhoneE164: phoneE164,
+      reqId,
     });
     return;
   }
@@ -167,9 +169,10 @@ async function handleInbound(m: WebhookMessage, restaurantId: string): Promise<v
       restaurantId,
       whatsappPhoneE164: phoneE164,
       userText: m.text.body,
+      reqId,
     });
     return;
   }
 
-  logger.info({ type: m.type, wamid: m.id }, 'unsupported message type');
+  logger.info({ type: m.type, wamid: m.id, reqId }, 'unsupported message type');
 }

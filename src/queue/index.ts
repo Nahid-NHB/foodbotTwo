@@ -7,6 +7,7 @@ import { resolveMediaUrl, downloadMedia, sendText } from '../whatsapp/client.js'
 import * as ConversationService from '../conversation/service.js';
 import { runConversationTurn } from '../ai/agent.js';
 import { findOrCreateByPhone } from '../customer/service.js';
+import { loggerForJob } from '../middleware/requestId.js';
 import db from '../db/client.js';
 
 // Transcribe job retry policy: 3 attempts total with exponential backoff.
@@ -32,6 +33,7 @@ export interface TranscribeJobData {
   customerId: string;
   restaurantId: string;
   whatsappPhoneE164: string;
+  reqId?: string;
 }
 
 export interface ConversationJobData {
@@ -41,6 +43,7 @@ export interface ConversationJobData {
   restaurantId: string;
   whatsappPhoneE164: string;
   userText: string;
+  reqId?: string;
 }
 
 export interface SendJobData {
@@ -78,6 +81,7 @@ const defaultWorkerOpts: Omit<WorkerOptions, 'connection'> = {
 const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
   const { messageId, mediaId, conversationId, customerId, restaurantId, whatsappPhoneE164 } =
     job.data;
+  const log = loggerForJob(job, { name: 'audio.transcribe' });
 
   // Idempotency: skip if transcript already set on the message row.
   const rows = await db.query<{ transcript: string | null }>(
@@ -85,7 +89,7 @@ const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
     [messageId],
   );
   if (rows[0]?.transcript) {
-    logger.info({ messageId }, 'transcribe: already transcribed, skipping');
+    log.info({ messageId }, 'transcribe: already transcribed, skipping');
     return { skipped: true };
   }
 
@@ -93,7 +97,7 @@ const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
   // the network round trip if we already have a transcript for this media_id.
   const cached = await getCachedTranscript(mediaId);
   if (cached) {
-    logger.info({ mediaId, messageId }, 'transcribe: cache hit');
+    log.info({ mediaId, messageId }, 'transcribe: cache hit');
     await db.query(`UPDATE messages SET transcript = $1 WHERE id = $2`, [cached, messageId]);
     await processQueue.add('turn', {
       messageId,
@@ -102,6 +106,7 @@ const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
       restaurantId,
       whatsappPhoneE164,
       userText: cached,
+      reqId: job.data.reqId,
     });
     return { cache_hit: true, transcript_length: cached.length };
   }
@@ -123,6 +128,7 @@ const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
     restaurantId,
     whatsappPhoneE164,
     userText: transcript,
+    reqId: job.data.reqId,
   });
 
   return { transcript_length: transcript.length };
@@ -130,6 +136,7 @@ const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
 
 const conversationProcessor: Processor<ConversationJobData> = async (job) => {
   const { conversationId, customerId, restaurantId, userText } = job.data;
+  const log = loggerForJob(job, { name: 'conversation.process' });
 
   const result = await runConversationTurn({
     conversationId,
@@ -183,8 +190,9 @@ async function handleTranscribeFinalFailure(
   err: Error,
 ): Promise<void> {
   const { messageId, conversationId, customerId, restaurantId, whatsappPhoneE164 } = job.data;
-  logger.error(
-    { jobId: job.id, messageId, attemptsMade: job.attemptsMade, err: err.message },
+  const log = loggerForJob(job, { name: 'audio.transcribe' });
+  log.error(
+    { messageId, attemptsMade: job.attemptsMade, err: err.message },
     'transcribe: all attempts exhausted — sending fallback',
   );
   try {
@@ -196,9 +204,10 @@ async function handleTranscribeFinalFailure(
       restaurantId,
       whatsappPhoneE164,
       userText: TRANSCRIBE_FALLBACK_BN,
+      reqId: job.data.reqId,
     });
   } catch (writeErr) {
-    logger.error({ err: writeErr }, 'transcribe fallback: failed to enqueue fallback turn');
+    log.error({ err: writeErr }, 'transcribe fallback: failed to enqueue fallback turn');
   }
 }
 
@@ -223,8 +232,9 @@ export function createWorkers(): {
 
   for (const w of [transcribeWorker, conversationWorker, sendWorker]) {
     w.on('failed', (job, err) => {
-      logger.error(
-        { queue: w.name, jobId: job?.id, attemptsMade: job?.attemptsMade, err: err.message },
+      const log = job ? loggerForJob(job, { name: w.name }) : logger;
+      log.error(
+        { attemptsMade: job?.attemptsMade, err: err.message },
         'worker job failed',
       );
       if (w === transcribeWorker && job && job.attemptsMade >= TRANSCRIBE_RETRY.attempts) {

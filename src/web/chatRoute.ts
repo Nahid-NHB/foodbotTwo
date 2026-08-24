@@ -52,6 +52,10 @@ export async function registerChatRoute(app: FastifyInstance): Promise<void> {
     '/api/chat',
     {},
     async (req, reply) => {
+      const log = (req as { log?: typeof logger } & { id?: string }).log
+        ?? logger;
+      const reqId = (req as { id?: string }).id;
+
       // Parse and validate with Zod (we don't use Fastify's JSON schema so
       // we don't need zod-to-json-schema in the bundle).
       const parsed = ChatInputSchema.safeParse(req.body);
@@ -83,7 +87,7 @@ export async function registerChatRoute(app: FastifyInstance): Promise<void> {
       await db.query(
         `INSERT INTO messages (id, conversation_id, direction, kind, transcript, raw_payload)
          VALUES ($1, $2, 'inbound', 'text', $3, $4::jsonb)`,
-        [msgId, conversation.id, body.userText, JSON.stringify({ source: 'test-chat', phone: body.phone })],
+        [msgId, conversation.id, body.userText, JSON.stringify({ source: 'test-chat', phone: body.phone, reqId })],
       );
       await ConversationService.touchLastMessage(conversation.id);
 
@@ -97,7 +101,7 @@ export async function registerChatRoute(app: FastifyInstance): Promise<void> {
           userText: body.userText,
         });
       } catch (err) {
-        logger.error({ err, phone: body.phone }, 'agent turn failed');
+        log.error({ err, phone: body.phone, reqId }, 'agent turn failed');
         return reply.code(500).send({ error: 'agent_failed', detail: String(err) });
       }
 
@@ -109,7 +113,7 @@ export async function registerChatRoute(app: FastifyInstance): Promise<void> {
       await db.query(
         `INSERT INTO messages (id, conversation_id, direction, kind, transcript, raw_payload)
          VALUES ($1, $2, 'outbound', 'text', $3, $4::jsonb)`,
-        [outId, conversation.id, result.reply, JSON.stringify({ source: 'test-chat', tokensUsed: result.totalTokens })],
+        [outId, conversation.id, result.reply, JSON.stringify({ source: 'test-chat', tokensUsed: result.totalTokens, reqId })],
       );
 
       return reply.code(200).send({
