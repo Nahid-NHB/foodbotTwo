@@ -54,7 +54,7 @@ describe('config', () => {
     expect(mod.config.RESTAURANT_NAME).toBe('Hungry Bird');
     expect(mod.config.PORT).toBe(3000);
     expect(mod.config.LOG_LEVEL).toBe('info');
-    expect(mod.config.LLM_MODEL).toBe('gemini-2.0-flash');
+    expect(mod.config.LLM_MODEL).toBe('gemini-3.6-flash');
   });
 
   it('throws on missing required env', async () => {
