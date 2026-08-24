@@ -2,11 +2,25 @@ import { Queue, Worker, type Processor, type WorkerOptions } from 'bullmq';
 import { redis } from '../redis/client.js';
 import { logger } from '../logger.js';
 import { transcribe } from '../speech/transcribe.js';
+import { getCachedTranscript, setCachedTranscript } from '../speech/cache.js';
 import { resolveMediaUrl, downloadMedia, sendText } from '../whatsapp/client.js';
 import * as ConversationService from '../conversation/service.js';
 import { runConversationTurn } from '../ai/agent.js';
 import { findOrCreateByPhone } from '../customer/service.js';
 import db from '../db/client.js';
+
+// Transcribe job retry policy: 3 attempts total with exponential backoff.
+// Tuned for transient failures (Gemini 500s, WhatsApp media URL 5-min expiry).
+// With base delay 5000ms and exponential: retry 1 ≈ 5s, retry 2 ≈ 10s.
+const TRANSCRIBE_RETRY = {
+  attempts: 3,
+  backoff: { type: 'exponential' as const, delay: 5000 },
+};
+
+// Bangla fallback the customer sees if STT ultimately fails — we still try to
+// run the conversation so they can re-voice or type.
+const TRANSCRIBE_FALLBACK_BN =
+  'ভাই, ভয়েসটা বুঝতে পারিনি। টেক্সটে লিখে দিলে দ্রুত অর্ডার নিতে পারব।';
 
 const QUEUE_PREFIX = 'foodbot';
 
@@ -38,6 +52,12 @@ export interface SendJobData {
 export const audioQueue = new Queue<TranscribeJobData>('audio.transcribe', {
   connection: redis,
   prefix: QUEUE_PREFIX,
+  defaultJobOptions: {
+    attempts: TRANSCRIBE_RETRY.attempts,
+    backoff: TRANSCRIBE_RETRY.backoff,
+    removeOnComplete: { count: 1000 },
+    removeOnFail: { count: 1000 },
+  },
 });
 
 export const processQueue = new Queue<ConversationJobData>('conversation.process', {
@@ -69,10 +89,30 @@ const transcribeProcessor: Processor<TranscribeJobData> = async (job) => {
     return { skipped: true };
   }
 
+  // Cache lookup — Meta resends the same media_id for replays/retries. Skip
+  // the network round trip if we already have a transcript for this media_id.
+  const cached = await getCachedTranscript(mediaId);
+  if (cached) {
+    logger.info({ mediaId, messageId }, 'transcribe: cache hit');
+    await db.query(`UPDATE messages SET transcript = $1 WHERE id = $2`, [cached, messageId]);
+    await processQueue.add('turn', {
+      messageId,
+      conversationId,
+      customerId,
+      restaurantId,
+      whatsappPhoneE164,
+      userText: cached,
+    });
+    return { cache_hit: true, transcript_length: cached.length };
+  }
+
   const url = await resolveMediaUrl(mediaId);
   const buf = await downloadMedia(url);
 
   const transcript = await transcribe(buf, job.data.mimeType);
+
+  // Fire-and-forget cache write — we don't want a cache failure to fail the job.
+  void setCachedTranscript(mediaId, transcript);
 
   await db.query(`UPDATE messages SET transcript = $1 WHERE id = $2`, [transcript, messageId]);
 
@@ -128,6 +168,40 @@ const sendProcessor: Processor<SendJobData> = async (job) => {
   return { sent: true };
 };
 
+/**
+ * On terminal STT failure (all retries exhausted), surface a Bangla fallback
+ * to the customer instead of going silent: enqueue a conversation turn with
+ * the fallback text and enqueue the fallback reply. The customer can then
+ * re-voice or type what they actually wanted.
+ *
+ * Only fires for transcribe jobs that exhausted retries (`attemptsMade >=
+ * attempts` and `failedReason` is set). Mid-retry failures fall through to
+ * the `failed` listener above which just logs.
+ */
+async function handleTranscribeFinalFailure(
+  job: { id?: string; data: TranscribeJobData; attemptsMade: number },
+  err: Error,
+): Promise<void> {
+  const { messageId, conversationId, customerId, restaurantId, whatsappPhoneE164 } = job.data;
+  logger.error(
+    { jobId: job.id, messageId, attemptsMade: job.attemptsMade, err: err.message },
+    'transcribe: all attempts exhausted — sending fallback',
+  );
+  try {
+    await db.query(`UPDATE messages SET transcript = $1 WHERE id = $2`, [TRANSCRIBE_FALLBACK_BN, messageId]);
+    await processQueue.add('turn', {
+      messageId,
+      conversationId,
+      customerId,
+      restaurantId,
+      whatsappPhoneE164,
+      userText: TRANSCRIBE_FALLBACK_BN,
+    });
+  } catch (writeErr) {
+    logger.error({ err: writeErr }, 'transcribe fallback: failed to enqueue fallback turn');
+  }
+}
+
 export function createWorkers(): {
   close: () => Promise<void>;
 } {
@@ -149,7 +223,16 @@ export function createWorkers(): {
 
   for (const w of [transcribeWorker, conversationWorker, sendWorker]) {
     w.on('failed', (job, err) => {
-      logger.error({ jobId: job?.id, err: err.message }, 'worker job failed');
+      logger.error(
+        { queue: w.name, jobId: job?.id, attemptsMade: job?.attemptsMade, err: err.message },
+        'worker job failed',
+      );
+      if (w === transcribeWorker && job && job.attemptsMade >= TRANSCRIBE_RETRY.attempts) {
+        void handleTranscribeFinalFailure(
+          { id: job.id, data: job.data, attemptsMade: job.attemptsMade },
+          err,
+        );
+      }
     });
   }
 
