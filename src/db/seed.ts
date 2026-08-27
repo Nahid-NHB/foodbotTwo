@@ -214,6 +214,33 @@ export async function seed(): Promise<void> {
       );
     }
 
+    const zones: Array<{ name: string; eta_minutes: number; delivery_fee_paisa: number }> = [
+      { name: 'Dhanmondi',   eta_minutes: 30, delivery_fee_paisa: 4000 },
+      { name: 'Mohammadpur', eta_minutes: 35, delivery_fee_paisa: 5000 },
+      { name: 'Mirpur',      eta_minutes: 45, delivery_fee_paisa: 6000 },
+    ];
+
+    for (const z of zones) {
+      await client.query(
+        `INSERT INTO delivery_zones (id, restaurant_id, name, eta_minutes, delivery_fee_paisa)
+         SELECT $1, $2, $3, $4, $5
+         WHERE NOT EXISTS (
+           SELECT 1 FROM delivery_zones WHERE restaurant_id = $2 AND name = $3
+         )`,
+        [randomUUID(), restaurantId, z.name, z.eta_minutes, z.delivery_fee_paisa],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO customer_addresses (id, customer_id, zone_id, line1, is_default)
+       SELECT gen_random_uuid(), c.id, NULL, c.default_address, true
+       FROM customers c
+       WHERE c.default_address IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_addresses WHERE customer_id = c.id
+         )`,
+    );
+
     await client.query('COMMIT');
     saveIdMap(ids);
     logger.info(
@@ -232,6 +259,8 @@ export async function seed(): Promise<void> {
     client.release();
   }
 }
+
+export { seed as runSeed };
 
 const isDirectRun = import.meta.url === `file://${process.argv[1]}`;
 if (isDirectRun) {
