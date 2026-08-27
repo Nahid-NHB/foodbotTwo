@@ -16,7 +16,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { pool, closeDb } from './client.js';
+import db, { pool, closeDb } from './client.js';
 import { seed } from './seed.js';
 import { findOrCreateByPhone } from '../customer/service.js';
 
@@ -71,7 +71,7 @@ describe('seed: delivery zones + customer_addresses backfill', () => {
   });
 
   it('seeds exactly three delivery zones for the restaurant', async () => {
-    const rows = await pool.query<{ name: string }>(
+    const rows = await db.query<{ name: string }>(
       `SELECT name FROM delivery_zones
        WHERE restaurant_id = $1 AND is_active = true`,
       [restaurantId],
@@ -81,7 +81,7 @@ describe('seed: delivery zones + customer_addresses backfill', () => {
   });
 
   it('backfills customer_addresses for customers with default_address', async () => {
-    const rows = await pool.query<{ line1: string; zone_id: string | null; is_default: boolean }>(
+    const rows = await db.query<{ line1: string; zone_id: string | null; is_default: boolean }>(
       `SELECT line1, zone_id, is_default
        FROM customer_addresses
        WHERE customer_id = $1`,

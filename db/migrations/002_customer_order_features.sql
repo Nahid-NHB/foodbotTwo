@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS delivery_zones (
 CREATE TABLE IF NOT EXISTS customer_addresses (
   id uuid PRIMARY KEY,
   customer_id uuid NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  zone_id uuid NOT NULL REFERENCES delivery_zones(id) ON DELETE RESTRICT,
+  -- zone_id may be NULL for legacy backfilled rows from customers.default_address
+  -- (see Task 2 seed). New addresses created via set_delivery_address always
+  -- pass a real zone; the application rejects NULL zone_id on input.
+  zone_id uuid REFERENCES delivery_zones(id) ON DELETE RESTRICT,
   line1 text NOT NULL,
   line2 text,
   note_for_rider text,
@@ -24,6 +27,8 @@ CREATE TABLE IF NOT EXISTS customer_addresses (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+-- Backfill amendment: drop NOT NULL on zone_id for legacy rows.
+ALTER TABLE customer_addresses ALTER COLUMN zone_id DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_customer_addresses_default
   ON customer_addresses(customer_id) WHERE is_default;
 
