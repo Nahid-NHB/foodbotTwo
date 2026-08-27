@@ -16,7 +16,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { closeDb, pool } from '../db/client.js';
+import db, { closeDb, pool } from '../db/client.js';
+import { newId } from '../common/id.js';
 import { seed } from '../db/seed.js';
 import { confirm, getById, transition, listHistoryByCustomer } from './service.js';
 import { findOrCreateByPhone } from '../customer/service.js';
@@ -217,8 +218,13 @@ describe('order service (integration)', () => {
   describe('listHistoryByCustomer', () => {
     it('returns most-recent-first active orders for a customer', async () => {
       // Create a dedicated customer so we don't collide with other tests.
-      const c = await findOrCreateByPhone('+8801700000777');
+      const c = await findOrCreateByPhone('+8801700000111');
       const cid = c.id;
+
+      // Wipe any previous orders for this customer from prior runs to make
+      // assertions deterministic.
+      await pool.query('DELETE FROM order_events WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)', [cid]);
+      await pool.query('DELETE FROM orders WHERE customer_id = $1', [cid]);
 
       // Insert 3 orders with distinct created_at (oldest → newest).
       const itemsJson = JSON.stringify([
@@ -233,7 +239,7 @@ describe('order service (integration)', () => {
         },
       ]);
       const insertOne = async (state: string, minsAgo: number) => {
-        const id = `00000000-0000-4000-8000-${String(minsAgo).padStart(12, '0')}`;
+        const id = newId();
         await pool.query(
           `INSERT INTO orders (id, restaurant_id, customer_id, state, items,
               subtotal_paisa, delivery_fee_paisa, total_paisa,
@@ -300,7 +306,7 @@ describe('order service (integration)', () => {
       const baseTime = Date.now() - 60 * 60 * 1000; // 1h ago
       const ids5: string[] = [];
       for (let i = 0; i < 5; i++) {
-        const id = `00000000-0000-4000-8000-${String(100 + i).padStart(12, '0')}`;
+        const id = newId();
         ids5.push(id);
         const ts = new Date(baseTime + i * 60_000).toISOString(); // +1 min each
         await pool.query(
@@ -314,11 +320,11 @@ describe('order service (integration)', () => {
 
       // 4th order's created_at (index 3). Orders strictly older than that
       // are ids5[0], ids5[1], ids5[2].
-      const fourthCreatedAt = await pool.query<{ created_at: string }>(
+      const fourthCreatedAt = await db.query<{ created_at: string }>(
         `SELECT created_at FROM orders WHERE id = $1`,
         [ids5[3]],
       );
-      const before = fourthCreatedAt.rows[0]!.created_at.toString();
+      const before = fourthCreatedAt[0]!.created_at;
 
       const rows = await listHistoryByCustomer(cid, {
         limit: 2,
@@ -337,10 +343,24 @@ describe('order service (integration)', () => {
     });
 
     it('returns empty array for a customer with no orders', async () => {
-      const newCust = await pool.query<{ id: string }>(
-        `INSERT INTO customers (id, phone_e164) VALUES (uuid_generate_v4(), '+8801700000666') RETURNING id`,
+      // Find an existing customer with no orders, or insert a fresh one.
+      // Reusing an existing id keeps the test idempotent across runs.
+      const existing = await db.query<{ id: string }>(
+        `SELECT id FROM customers WHERE phone_e164 = $1`,
+        ['+8801700000555'],
       );
-      const newCustomerId = newCust.rows[0]!.id;
+      let newCustomerId: string;
+      if (existing[0]) {
+        newCustomerId = existing[0].id;
+        // Wipe any orders that may have leaked from other tests.
+        await pool.query('DELETE FROM order_events WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)', [newCustomerId]);
+        await pool.query('DELETE FROM orders WHERE customer_id = $1', [newCustomerId]);
+      } else {
+        const newCust = await db.query<{ id: string }>(
+          `INSERT INTO customers (id, phone_e164) VALUES (uuid_generate_v4(), '+8801700000555') RETURNING id`,
+        );
+        newCustomerId = newCust[0]!.id;
+      }
 
       const rows = await listHistoryByCustomer(newCustomerId, {
         limit: 5,

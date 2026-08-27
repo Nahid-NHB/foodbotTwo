@@ -55,4 +55,8 @@ CREATE TABLE IF NOT EXISTS order_modifications (
 
 ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS requested_for timestamptz,
-  ADD COLUMN IF NOT EXISTS delivery_zone_id uuid REFERENCES delivery_zones(id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS delivery_zone_id uuid REFERENCES delivery_zones(id) ON DELETE SET NULL,
+  -- delivered_at: timestamp when an order reached the 'delivered' state.
+  -- Required by get_order_history (spec §5) and get_order_status. Set by
+  -- OrderService.transition when transitioning to 'delivered'.
+  ADD COLUMN IF NOT EXISTS delivered_at timestamptz;
