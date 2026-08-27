@@ -31,6 +31,11 @@ const schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+
+  FEATURE_CUSTOMER_ORDER_PHASE2: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema>;

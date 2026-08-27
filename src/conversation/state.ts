@@ -3,8 +3,9 @@ import type { ConversationState } from './types.js';
 
 const ALLOWED: Record<ConversationState, ReadonlyArray<ConversationState>> = {
   idle: ['ordering'],
-  ordering: ['awaiting_confirmation', 'idle'],
+  ordering: ['awaiting_confirmation', 'idle', 'awaiting_modify_confirmation'],
   awaiting_confirmation: ['ordering', 'idle'],
+  awaiting_modify_confirmation: ['idle', 'ordering'],
 };
 
 export function canTransitionConversation(from: ConversationState, to: ConversationState): boolean {

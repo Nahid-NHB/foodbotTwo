@@ -3,7 +3,8 @@ import type { CartItem } from '../cart/types.js';
 export type ConversationState =
   | 'idle'
   | 'ordering'
-  | 'awaiting_confirmation';
+  | 'awaiting_confirmation'
+  | 'awaiting_modify_confirmation';
 
 export interface Conversation {
   id: string;

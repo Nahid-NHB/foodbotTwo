@@ -17,4 +17,19 @@ describe('conversation state machine', () => {
   it('assertCanTransitionConversation throws on invalid', () => {
     expect(() => assertCanTransitionConversation('idle', 'awaiting_confirmation')).toThrow();
   });
+  it('allows ordering -> awaiting_modify_confirmation', () => {
+    expect(canTransitionConversation('ordering', 'awaiting_modify_confirmation')).toBe(true);
+  });
+
+  it('allows awaiting_modify_confirmation -> idle', () => {
+    expect(canTransitionConversation('awaiting_modify_confirmation', 'idle')).toBe(true);
+  });
+
+  it('allows awaiting_modify_confirmation -> ordering', () => {
+    expect(canTransitionConversation('awaiting_modify_confirmation', 'ordering')).toBe(true);
+  });
+
+  it('rejects awaiting_modify_confirmation -> awaiting_confirmation', () => {
+    expect(canTransitionConversation('awaiting_modify_confirmation', 'awaiting_confirmation')).toBe(false);
+  });
 });
