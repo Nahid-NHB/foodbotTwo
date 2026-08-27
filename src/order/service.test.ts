@@ -16,9 +16,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { closeDb } from '../db/client.js';
+import { closeDb, pool } from '../db/client.js';
 import { seed } from '../db/seed.js';
-import { confirm, getById, transition } from './service.js';
+import { confirm, getById, transition, listHistoryByCustomer } from './service.js';
 import { findOrCreateByPhone } from '../customer/service.js';
 import {
   MenuItemNotFoundError,
@@ -212,5 +212,197 @@ describe('order service (integration)', () => {
         delivery_fee_paisa: Number.NaN,
       }),
     ).rejects.toBeInstanceOf(OrderNotConfirmableError);
+  });
+
+  describe('listHistoryByCustomer', () => {
+    it('returns most-recent-first active orders for a customer', async () => {
+      // Create a dedicated customer so we don't collide with other tests.
+      const c = await findOrCreateByPhone('+8801700000777');
+      const cid = c.id;
+
+      // Insert 3 orders with distinct created_at (oldest → newest).
+      const itemsJson = JSON.stringify([
+        {
+          menu_item_id: ids.item['chicken_burger']!,
+          name: 'Chicken Burger',
+          quantity: 1,
+          unit_price_paisa: 18000,
+          addon_ids: [],
+          addons: [],
+          line_total_paisa: 18000,
+        },
+      ]);
+      const insertOne = async (state: string, minsAgo: number) => {
+        const id = `00000000-0000-4000-8000-${String(minsAgo).padStart(12, '0')}`;
+        await pool.query(
+          `INSERT INTO orders (id, restaurant_id, customer_id, state, items,
+              subtotal_paisa, delivery_fee_paisa, total_paisa,
+              created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5::jsonb, 18000, 0, 18000,
+              now() - ($6 || ' minutes')::interval, now() - ($6 || ' minutes')::interval)`,
+          [id, restaurantId, cid, state, itemsJson, minsAgo],
+        );
+        return id;
+      };
+
+      const oldest = await insertOne('delivered', 10); // terminal — excluded by default
+      await insertOne('pending', 5);
+      await insertOne('preparing', 1); // most recent active
+
+      const active = await listHistoryByCustomer(cid, {
+        limit: 5,
+        beforeIso: null,
+        includeTerminal: false,
+      });
+      expect(active).toHaveLength(2);
+      // Most-recent-first: preparing (1 min ago) before pending (5 min ago).
+      expect(active[0]!.state).toBe('preparing');
+      expect(active[1]!.state).toBe('pending');
+      // Sanity: created_at strictly DESC.
+      expect(new Date(active[0]!.created_at).getTime()).toBeGreaterThan(
+        new Date(active[1]!.created_at).getTime(),
+      );
+
+      const all = await listHistoryByCustomer(cid, {
+        limit: 5,
+        beforeIso: null,
+        includeTerminal: true,
+      });
+      expect(all).toHaveLength(3);
+      // First should be the most-recent preparing; oldest delivered last.
+      expect(all[0]!.state).toBe('preparing');
+      expect(all[all.length - 1]!.id).toBe(oldest);
+      expect(all[all.length - 1]!.state).toBe('delivered');
+    });
+
+    it('respects limit and beforeIso', async () => {
+      const c = await findOrCreateByPhone('+8801700000888');
+      const cid = c.id;
+
+      // Wipe any previous orders for this customer from prior runs to make
+      // assertions deterministic.
+      await pool.query('DELETE FROM order_events WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)', [cid]);
+      await pool.query('DELETE FROM orders WHERE customer_id = $1', [cid]);
+
+      const itemsJson = JSON.stringify([
+        {
+          menu_item_id: ids.item['chicken_burger']!,
+          name: 'Chicken Burger',
+          quantity: 1,
+          unit_price_paisa: 18000,
+          addon_ids: [],
+          addons: [],
+          line_total_paisa: 18000,
+        },
+      ]);
+
+      // Insert 5 orders with explicit ascending created_at.
+      const baseTime = Date.now() - 60 * 60 * 1000; // 1h ago
+      const ids5: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const id = `00000000-0000-4000-8000-${String(100 + i).padStart(12, '0')}`;
+        ids5.push(id);
+        const ts = new Date(baseTime + i * 60_000).toISOString(); // +1 min each
+        await pool.query(
+          `INSERT INTO orders (id, restaurant_id, customer_id, state, items,
+              subtotal_paisa, delivery_fee_paisa, total_paisa,
+              created_at, updated_at)
+           VALUES ($1, $2, $3, 'pending', $4::jsonb, 18000, 0, 18000, $5::timestamptz, $5::timestamptz)`,
+          [id, restaurantId, cid, itemsJson, ts],
+        );
+      }
+
+      // 4th order's created_at (index 3). Orders strictly older than that
+      // are ids5[0], ids5[1], ids5[2].
+      const fourthCreatedAt = await pool.query<{ created_at: string }>(
+        `SELECT created_at FROM orders WHERE id = $1`,
+        [ids5[3]],
+      );
+      const before = fourthCreatedAt.rows[0]!.created_at.toString();
+
+      const rows = await listHistoryByCustomer(cid, {
+        limit: 2,
+        beforeIso: before,
+        includeTerminal: true,
+      });
+      expect(rows).toHaveLength(2);
+      const beforeMs = new Date(before).getTime();
+      for (const r of rows) {
+        expect(new Date(r.created_at).getTime()).toBeLessThan(beforeMs);
+      }
+      // DESC ordering: most recent of the eligible ones first.
+      expect(new Date(rows[0]!.created_at).getTime()).toBeGreaterThan(
+        new Date(rows[1]!.created_at).getTime(),
+      );
+    });
+
+    it('returns empty array for a customer with no orders', async () => {
+      const newCust = await pool.query<{ id: string }>(
+        `INSERT INTO customers (id, phone_e164) VALUES (uuid_generate_v4(), '+8801700000666') RETURNING id`,
+      );
+      const newCustomerId = newCust.rows[0]!.id;
+
+      const rows = await listHistoryByCustomer(newCustomerId, {
+        limit: 5,
+        beforeIso: null,
+        includeTerminal: false,
+      });
+      expect(rows).toEqual([]);
+    });
+
+    it('items_summary is computed from the snapshot', async () => {
+      const c = await findOrCreateByPhone('+8801700000999');
+      const cid = c.id;
+
+      // Wipe orders for determinism.
+      await pool.query('DELETE FROM order_events WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)', [cid]);
+      await pool.query('DELETE FROM orders WHERE customer_id = $1', [cid]);
+
+      const items = [
+        {
+          menu_item_id: ids.item['chicken_burger']!,
+          name: 'Chicken Burger',
+          quantity: 2,
+          unit_price_paisa: 18000,
+          addon_ids: [],
+          addons: [],
+          line_total_paisa: 36000,
+        },
+        {
+          menu_item_id: ids.item['coke']!,
+          name: 'Coke',
+          quantity: 1,
+          unit_price_paisa: 5000,
+          addon_ids: [],
+          addons: [],
+          line_total_paisa: 5000,
+        },
+      ];
+
+      const order = await confirm({
+        restaurant_id: restaurantId,
+        customer_id: cid,
+        items,
+        delivery_fee_paisa: 0,
+      });
+
+      const rows = await listHistoryByCustomer(cid, {
+        limit: 5,
+        beforeIso: null,
+        includeTerminal: true,
+      });
+      expect(rows).toHaveLength(1);
+      const r = rows[0]!;
+      expect(r.id).toBe(order.id);
+      expect(r.item_count).toBe(3);
+      expect(r.items_summary).toContain('Chicken Burger');
+      expect(r.items_summary).toContain('Coke');
+      expect(r.items_summary).toContain('× ');
+      // Snapshot fields.
+      expect(r.subtotal_paisa).toBe(41000);
+      expect(r.delivery_fee_paisa).toBe(0);
+      expect(r.total_paisa).toBe(41000);
+      expect(r.confirmed_at).toBeTruthy();
+    });
   });
 });

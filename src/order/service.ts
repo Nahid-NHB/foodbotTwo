@@ -7,7 +7,7 @@ import {
 import { sumPaisa } from '../common/money.js';
 import { assertCanTransition } from './state.js';
 import { revalidateItems } from './menuRevalidator.js';
-import type { CreateOrderInput, Order, OrderState, OrderItemSnapshot } from './types.js';
+import type { CreateOrderInput, Order, OrderState, OrderItemSnapshot, OrderHistoryRow, ListHistoryOptions } from './types.js';
 
 /**
  * Recompute server-side totals from items + delivery fee.
@@ -180,4 +180,51 @@ export async function listByCustomer(customerId: string): Promise<Order[]> {
     [customerId],
   );
   return rows;
+}
+
+/**
+ * Return a summary view of a customer's recent orders (most recent first).
+ * Builds items_summary + item_count inline from the jsonb items column so
+ * the summary is always consistent with the snapshot — no risk of a stale
+ * denormalized column drifting from items.
+ *
+ * Default behavior excludes terminal states (delivered, cancelled) so the
+ * customer's "active" orders surface first. Pass includeTerminal=true to
+ * see history including past orders.
+ */
+export async function listHistoryByCustomer(
+  customerId: string,
+  opts: ListHistoryOptions,
+): Promise<OrderHistoryRow[]> {
+  const limit = Math.max(1, Math.min(20, Math.floor(opts.limit)));
+  const params: unknown[] = [customerId];
+  let where = `customer_id = $1`;
+  if (opts.beforeIso) {
+    params.push(opts.beforeIso);
+    where += ` AND created_at < $${params.length}`;
+  }
+  if (!opts.includeTerminal) {
+    where += ` AND state NOT IN ('delivered','cancelled')`;
+  }
+  params.push(limit);
+  return db.query<OrderHistoryRow>(
+    `SELECT
+       o.id, o.state,
+       COALESCE(
+         (SELECT string_agg((elem->>'name') || ' × ' || (elem->>'quantity'), ', ')
+          FROM jsonb_array_elements(o.items) AS elem),
+         ''
+       ) AS items_summary,
+       COALESCE(
+         (SELECT SUM((elem->>'quantity')::int) FROM jsonb_array_elements(o.items) AS elem),
+         0
+       )::int AS item_count,
+       o.subtotal_paisa, o.delivery_fee_paisa, o.total_paisa,
+       o.created_at, o.confirmed_at, o.delivered_at, o.cancelled_at
+     FROM orders o
+     WHERE ${where}
+     ORDER BY o.created_at DESC
+     LIMIT $${params.length}`,
+    params,
+  );
 }

@@ -49,3 +49,23 @@ export interface CreateOrderInput {
   payment_method?: string | null;
   special_instructions?: string | null;
 }
+
+export interface OrderHistoryRow {
+  id: string;
+  state: OrderState;
+  items_summary: string;        // comma-separated item names e.g. "Chicken Burger × 2, Coke × 1"
+  item_count: number;           // sum of quantities
+  subtotal_paisa: number;
+  delivery_fee_paisa: number;
+  total_paisa: number;
+  created_at: string;
+  confirmed_at: string | null;
+  delivered_at: string | null;
+  cancelled_at: string | null;
+}
+
+export interface ListHistoryOptions {
+  limit: number;       // 1..20
+  beforeIso: string | null;
+  includeTerminal: boolean;  // include delivered/cancelled; default false
+}
