@@ -69,3 +69,25 @@ export interface ListHistoryOptions {
   beforeIso: string | null;
   includeTerminal: boolean;  // include delivered/cancelled; default false
 }
+
+export interface OrderModification {
+  id: string;
+  order_id: string;
+  old_items: OrderItemSnapshot[];
+  new_items: OrderItemSnapshot[];
+  old_total_paisa: number;
+  new_total_paisa: number;
+  actor: 'customer' | 'staff' | 'system';
+  created_at: string;
+}
+
+export type ApplyModificationInput = {
+  orderId: string;
+  customerId: string;
+  newItems: OrderItemSnapshot[];
+};
+
+export type ApplyModificationResult = {
+  order: Order;
+  modification: OrderModification;
+};
