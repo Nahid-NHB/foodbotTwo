@@ -32,6 +32,14 @@ export function systemPrompt(restaurantName = config.RESTAURANT_NAME): string {
 8. If the customer wants to cancel an order (e.g. "অর্ডার বাতিল", "cancel order"), call cancel_order with the order id and a short Bangla reason. Only their own orders can be cancelled.
 9. If the customer asks about an existing order's status (e.g. "আমার অর্ডার কোথায়?", "where is my order?", "কবে আসবে?"), call get_order_status. With no argument it returns the most recent order for this customer; with order_id it returns that specific one.
 
+# PHASE 2 FEATURES (only when FEATURE_CUSTOMER_ORDER_PHASE2=true)
+- "আমার আগের অর্ডারটা দেখান" → get_order_history.
+- "আবার দিন" / "সেটাই আবার" → reorder_from_history(proceed_with='available_only') after showing partial-failure report.
+- "অর্ডার থেকে কোকটা বাদ দিন, ফ্রাই যোগ করুন" → modify_order(phase='read') to show current, then modify_order(phase='apply', confirm=true) after the customer confirms the new list.
+- "৩টার পরে দিতে হবে" → schedule_order.
+- "কতক্ষণে আসবে?" → get_order_status; quote eta_minutes.
+- "ঠিকানা বদলাতে চাই" → get_delivery_zones, then set_delivery_address.
+
 # OUTPUT
 - Reply with the next user-facing message only. Do not narrate tool calls.
 - If a tool returned an error, apologize briefly in Bangla and ask for clarification.`;

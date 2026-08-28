@@ -5,6 +5,10 @@ import * as CartService from '../cart/service.js';
 import * as CustomerService from '../customer/service.js';
 import * as OrderService from '../order/service.js';
 import * as ConversationService from '../conversation/service.js';
+import * as DeliveryService from '../delivery/service.js';
+import * as OrderModificationService from '../order/modifications.js';
+import db from '../db/client.js';
+import { revalidateItems } from '../order/menuRevalidator.js';
 import { formatBDT } from '../common/money.js';
 import { MenuItemNotFoundError, ToolError } from '../common/errors.js';
 import { config } from '../config.js';
@@ -52,6 +56,7 @@ const CancelOrderSchema = z.object({
 // Either an explicit order_id, or omit to get the customer's most recent order.
 const GetOrderStatusSchema = z.object({
   order_id: z.string().uuid().optional(),
+  include_terminal: z.boolean().optional(),
 });
 
 const CustomerUpdateSchema = z.object({
@@ -63,6 +68,80 @@ const CustomerUpdateSchema = z.object({
 const CreateOrderSchema = z.object({
   confirm: z.literal(true).describe('Must be exactly true. Refuses otherwise.'),
 });
+
+// ---------- phase 2 schemas ----------
+
+const GetDeliveryZonesSchema = z.object({});
+
+const SetDeliveryAddressSchema = z.object({
+  zone_id: z.string().uuid(),
+  line1: z.string().min(1).max(500),
+  line2: z.string().min(1).max(500).optional(),
+  note_for_rider: z.string().min(1).max(500).optional(),
+});
+
+const GetOrderHistorySchema = z.object({
+  limit: z.number().int().min(1).max(20).optional(),
+  before_iso: z.string().optional(),
+  include_terminal: z.boolean().optional(),
+});
+
+const ReorderFromHistorySchema = z.object({
+  order_id: z.string().uuid(),
+  proceed_with: z.enum(['all', 'available_only']).optional(),
+});
+
+// modify_order uses a discriminated union so the agent can't accidentally
+// pass `phase: 'apply'` without `confirm: true` + `items[]`, and vice versa.
+// A plain z.union would silently accept either shape in any order.
+const ModifyOrderSchema = z.discriminatedUnion('phase', [
+  z.object({
+    order_id: z.string().uuid(),
+    phase: z.literal('read'),
+  }),
+  z.object({
+    order_id: z.string().uuid(),
+    phase: z.literal('apply'),
+    confirm: z.literal(true),
+    items: z.array(
+      z.object({
+        menu_item_id: z.string().uuid(),
+        name: z.string().min(1),
+        quantity: z.number().int().positive(),
+        unit_price_paisa: z.number().int().nonnegative().optional(),
+        variant_id: z.string().uuid().optional(),
+        addon_ids: z.array(z.string().uuid()).optional(),
+        addons: z
+          .array(
+            z.object({
+              id: z.string().uuid(),
+              name: z.string(),
+              price_paisa: z.number().int().nonnegative(),
+            }),
+          )
+          .optional(),
+        line_total_paisa: z.number().int().nonnegative().optional(),
+      }),
+    ),
+  }),
+]);
+
+const ScheduleOrderSchema = z.object({
+  order_id: z.string().uuid(),
+  requested_for_iso: z.string().min(1),
+});
+
+// Set of tool names gated behind FEATURE_CUSTOMER_ORDER_PHASE2.
+// Verified at runTool() boundary BEFORE looking up the handler, so the
+// agent sees a stable 'feature_disabled' error rather than 'unknown_tool'.
+const PHASE2_TOOLS = new Set([
+  'get_delivery_zones',
+  'set_delivery_address',
+  'get_order_history',
+  'reorder_from_history',
+  'modify_order',
+  'schedule_order',
+]);
 
 // ---------- types ----------
 
@@ -255,7 +334,7 @@ export const toolDefinitions: FunctionDeclaration[] = [
   {
     name: 'get_order_status',
     description:
-      "Look up the status of one of the customer's orders. Pass an order_id to fetch a specific order, or omit order_id to get the customer's most recent order. Returns the order state (pending/confirmed/preparing/ready/out_for_delivery/delivered/cancelled), items, totals, and timestamps. Only returns orders owned by the current customer.",
+      "Look up the status of one of the customer's orders. Pass an order_id to fetch a specific order, or omit order_id to get the customer's most recent order. Returns the order state (pending/confirmed/preparing/ready/out_for_delivery/delivered/cancelled), items, totals, timestamps, and a notifications[] log. Only returns orders owned by the current customer.",
     parameters: {
       type: 'object',
       properties: {
@@ -264,8 +343,102 @@ export const toolDefinitions: FunctionDeclaration[] = [
           format: 'uuid',
           description: 'Optional. UUID of the order to look up. If omitted, returns the most recent order.',
         },
+        include_terminal: {
+          type: 'boolean',
+          description:
+            "Optional. When omitting order_id, include delivered/cancelled orders. Default false (active only).",
+        },
       },
       required: [],
+    },
+  },
+  {
+    name: 'get_delivery_zones',
+    description:
+      'List active delivery zones for the restaurant with name, ETA in minutes, and delivery fee. Call this when the customer wants to set or change their delivery address.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'set_delivery_address',
+    description:
+      "Save the customer's delivery address (zone + structured line1/line2/note). Returns the saved address and the zone's ETA + fee.",
+    parameters: {
+      type: 'object',
+      properties: {
+        zone_id: { type: 'string', format: 'uuid' },
+        line1: { type: 'string' },
+        line2: { type: 'string' },
+        note_for_rider: { type: 'string' },
+      },
+      required: ['zone_id', 'line1'],
+    },
+  },
+  {
+    name: 'get_order_history',
+    description:
+      "Get the customer's recent orders (most recent first). limit defaults to 5, max 20. include_terminal includes delivered/cancelled (default false — active only).",
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
+        before_iso: { type: 'string', format: 'date-time' },
+        include_terminal: { type: 'boolean' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'reorder_from_history',
+    description:
+      "Re-populate the conversation cart from a past order. Re-validates every line against the live menu. Unavailable items come back in the report so the customer can decide. With proceed_with='available_only', the available items are placed in the cart and the customer goes through the normal confirmation flow.",
+    parameters: {
+      type: 'object',
+      properties: {
+        order_id: { type: 'string', format: 'uuid' },
+        proceed_with: { type: 'string', enum: ['all', 'available_only'] },
+      },
+      required: ['order_id'],
+    },
+  },
+  {
+    name: 'modify_order',
+    description:
+      "Two-phase modify. phase='read': return current items for the order (use to show the customer). phase='apply': replace the items with the given array; requires confirm=true. Allowed only while order state is pending or confirmed.",
+    parameters: {
+      type: 'object',
+      properties: {
+        order_id: { type: 'string', format: 'uuid' },
+        phase: { type: 'string', enum: ['read', 'apply'] },
+        confirm: { type: 'boolean' },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              menu_item_id: { type: 'string', format: 'uuid' },
+              name: { type: 'string' },
+              quantity: { type: 'integer', minimum: 1 },
+              variant_id: { type: 'string', format: 'uuid' },
+              addon_ids: { type: 'array', items: { type: 'string', format: 'uuid' } },
+            },
+            required: ['menu_item_id', 'quantity'],
+          },
+        },
+      },
+      required: ['order_id', 'phase'],
+    },
+  },
+  {
+    name: 'schedule_order',
+    description:
+      'Schedule an order for a future time (max 7 days out). Sets orders.requested_for; ETA in get_order_status reflects requested_for + zone eta_minutes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        order_id: { type: 'string', format: 'uuid' },
+        requested_for_iso: { type: 'string', format: 'date-time' },
+      },
+      required: ['order_id', 'requested_for_iso'],
     },
   },
 ];
@@ -359,7 +532,14 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
           'cannot summarize empty cart',
         );
       }
-      const text = summaryText(items, config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA, config.RESTAURANT_NAME);
+      // Phase 2: use the customer's saved delivery address zone for the fee,
+      // so the summary matches what create_order will actually charge.
+      const addr = await DeliveryService.getDefaultAddress(ctx.customerId);
+      const fee = addr
+        ? (await DeliveryService.getZone(addr.zone_id))?.delivery_fee_paisa ??
+          config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA
+        : config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA;
+      const text = summaryText(items, fee, config.RESTAURANT_NAME);
       await ConversationService.transitionTo(ctx.conversationId, 'awaiting_confirmation');
       return JSON.stringify({ summary: text });
     },
@@ -394,13 +574,23 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
       CartService.assertNonEmpty(items);
       const customer = await CustomerService.getById(ctx.customerId);
 
+      // Phase 2: pick fee + delivery address + zone from the customer's saved
+      // structured address when present. Falls back to the legacy free-text
+      // default_address + flat delivery fee for customers who haven't set one.
+      const addr = await DeliveryService.getDefaultAddress(ctx.customerId);
+      const fee = addr
+        ? (await DeliveryService.getZone(addr.zone_id))?.delivery_fee_paisa ??
+          config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA
+        : config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA;
+
       const order = await OrderService.confirm({
         restaurant_id: ctx.restaurantId,
         customer_id: ctx.customerId,
         conversation_id: ctx.conversationId,
         items,
-        delivery_fee_paisa: config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA,
-        delivery_address: customer.default_address,
+        delivery_fee_paisa: fee,
+        delivery_address: addr?.line1 ?? customer.default_address,
+        delivery_zone_id: addr?.zone_id ?? null,
         payment_method: customer.payment_method,
       });
 
@@ -480,16 +670,38 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
           );
         }
       } else {
-        const recent = await OrderService.listByCustomer(ctx.customerId);
-        order = recent[0];
-        if (!order) {
+        // Phase 2: use the lightweight history view so we can honour
+        // include_terminal. Default is to exclude delivered/cancelled so the
+        // customer's "active" order surfaces first.
+        const recent = await OrderService.listHistoryByCustomer(ctx.customerId, {
+          limit: 1,
+          beforeIso: null,
+          includeTerminal: parsed.include_terminal ?? false,
+        });
+        const head = recent[0];
+        if (!head) {
           throw new ToolError(
             'order_not_found',
             'আপনার কোনো অর্ডার নেই।',
             `get_order_status: customer ${ctx.customerId} has no orders`,
           );
         }
+        // Hydrate to the full Order shape so the response below stays
+        // backward-compatible with anything that depends on `items[]`.
+        order = await OrderService.getById(head.id);
       }
+      // Phase 2: always include a notifications log so the customer can see
+      // when each state-change WhatsApp was sent (and when Meta confirmed
+      // delivery). Cheap read; no need to batch.
+      const notif = await db.query<{
+        to_state: string;
+        sent_at: string;
+        delivered_at: string | null;
+      }>(
+        `SELECT to_state, sent_at, delivered_at FROM order_status_notifications
+         WHERE order_id = $1 ORDER BY sent_at ASC`,
+        [order.id],
+      );
       return JSON.stringify({
         order_id: order.id,
         state: order.state,
@@ -499,12 +711,202 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
         total_paisa: order.total_paisa,
         total_display: formatBDT(order.total_paisa),
         delivery_address: order.delivery_address,
+        delivery_zone_id: order.delivery_zone_id,
+        requested_for: order.requested_for,
         payment_method: order.payment_method,
         confirmed_at: order.confirmed_at,
         cancelled_at: order.cancelled_at,
         cancel_reason: order.cancel_reason,
         created_at: order.created_at,
         updated_at: order.updated_at,
+        notifications: notif,
+      });
+    },
+  },
+
+  // ---------- phase 2 handlers ----------
+
+  get_delivery_zones: {
+    schema: GetDeliveryZonesSchema,
+    fn: async (_args, ctx) => {
+      const zones = await DeliveryService.listActiveZones(ctx.restaurantId);
+      return JSON.stringify({ zones });
+    },
+  },
+
+  set_delivery_address: {
+    schema: SetDeliveryAddressSchema,
+    fn: async (args, ctx) => {
+      const parsed = SetDeliveryAddressSchema.parse(args);
+      const address = await DeliveryService.setAddress(ctx.customerId, parsed);
+      const zone = await DeliveryService.getZone(address.zone_id);
+      return JSON.stringify({
+        address,
+        eta_minutes: zone?.eta_minutes ?? null,
+        delivery_fee_paisa: zone?.delivery_fee_paisa ?? null,
+      });
+    },
+  },
+
+  get_order_history: {
+    schema: GetOrderHistorySchema,
+    fn: async (args, ctx) => {
+      const parsed = GetOrderHistorySchema.parse(args);
+      const orders = await OrderService.listHistoryByCustomer(ctx.customerId, {
+        limit: parsed.limit ?? 5,
+        beforeIso: parsed.before_iso ?? null,
+        includeTerminal: parsed.include_terminal ?? false,
+      });
+      if (orders.length === 0) {
+        throw new ToolError(
+          'no_history',
+          'আপনার কোনো পুরাতন অর্ডার নেই।',
+          `customer ${ctx.customerId} has no orders`,
+        );
+      }
+      return JSON.stringify({ orders });
+    },
+  },
+
+  reorder_from_history: {
+    schema: ReorderFromHistorySchema,
+    fn: async (args, ctx) => {
+      const parsed = ReorderFromHistorySchema.parse(args);
+      const order = await OrderService.getById(parsed.order_id).catch(() => null);
+      if (!order || order.customer_id !== ctx.customerId) {
+        // never leak existence
+        throw new ToolError(
+          'order_not_found',
+          'অর্ডার খুঁজে পাওয়া যায়নি।',
+          `reorder_from_history: order ${parsed.order_id} not found`,
+        );
+      }
+      // Revalidate every line independently against the live menu so the
+      // customer can see which items are still orderable. We pass
+      // unit_price_paisa=0 + line_total_paisa=0 because revalidateItems
+      // re-computes from the menu — we just want it to throw on missing
+      // or unavailable items.
+      const available: typeof order.items = [];
+      const unavailable: Array<{ name: string; reason: string }> = [];
+      for (const line of order.items) {
+        try {
+          const revalidated = await revalidateItems(ctx.restaurantId, [
+            { ...line, unit_price_paisa: 0, line_total_paisa: 0 },
+          ]);
+          available.push(revalidated[0]!);
+        } catch (err) {
+          // Surface the menu-side reason (item_not_found vs unavailable) but
+          // never the raw exception text.
+          const code = (err as { code?: string } | null)?.code ?? 'unavailable';
+          unavailable.push({ name: line.name, reason: code });
+        }
+      }
+      if (available.length === 0) {
+        throw new ToolError(
+          'nothing_available',
+          'কোনো আইটেমই এখন পাওয়া যাচ্ছে না।',
+          'nothing available to reorder',
+        );
+      }
+      // Partial-failure path: ask the customer before mutating the cart.
+      if (unavailable.length > 0 && parsed.proceed_with !== 'available_only') {
+        return JSON.stringify({
+          available,
+          unavailable,
+          cart_populated: false,
+        });
+      }
+      await ConversationService.setCart(ctx.conversationId, available);
+      await ConversationService.transitionTo(ctx.conversationId, 'ordering');
+      return JSON.stringify({
+        available,
+        unavailable,
+        cart_populated: true,
+      });
+    },
+  },
+
+  modify_order: {
+    schema: ModifyOrderSchema,
+    fn: async (args, ctx) => {
+      const parsed = ModifyOrderSchema.parse(args);
+      if (parsed.phase === 'read') {
+        const items = await OrderModificationService.getCurrentItems(
+          parsed.order_id,
+          ctx.customerId,
+        );
+        await ConversationService.transitionTo(
+          ctx.conversationId,
+          'awaiting_modify_confirmation',
+        );
+        return JSON.stringify({ current_items: items });
+      }
+      // phase === 'apply' — schema enforces confirm:true + items[].
+      const result = await OrderModificationService.applyModification({
+        orderId: parsed.order_id,
+        customerId: ctx.customerId,
+        newItems: parsed.items as never,
+      });
+      await ConversationService.transitionTo(ctx.conversationId, 'idle');
+      return JSON.stringify({
+        order_id: result.order.id,
+        items: result.order.items,
+        total_paisa: result.order.total_paisa,
+        total_display: formatBDT(result.order.total_paisa),
+        modified_at: result.modification.created_at,
+      });
+    },
+  },
+
+  schedule_order: {
+    schema: ScheduleOrderSchema,
+    fn: async (args, ctx) => {
+      const parsed = ScheduleOrderSchema.parse(args);
+      const requested = new Date(parsed.requested_for_iso);
+      const now = new Date();
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      if (
+        Number.isNaN(requested.getTime()) ||
+        requested <= now ||
+        requested.getTime() - now.getTime() > sevenDaysMs
+      ) {
+        throw new ToolError(
+          'bad_schedule_window',
+          'সময়টি সঠিক নয়। আগামী ৭ দিনের মধ্যে একটি সময় দিন।',
+          `schedule_order: bad window ${parsed.requested_for_iso}`,
+        );
+      }
+      const order = await OrderService.getById(parsed.order_id).catch(() => null);
+      if (!order || order.customer_id !== ctx.customerId) {
+        throw new ToolError(
+          'order_not_found',
+          'অর্ডার খুঁজে পাওয়া যায়নি।',
+          `schedule_order: order ${parsed.order_id} not found`,
+        );
+      }
+      if (!['pending', 'confirmed', 'preparing'].includes(order.state)) {
+        throw new ToolError(
+          'order_not_modifiable',
+          'এই অর্ডারটি আর শিডিউল করা যাবে নে।',
+          `schedule_order: state ${order.state} cannot be scheduled`,
+        );
+      }
+      await db.query(
+        `UPDATE orders SET requested_for = $1, updated_at = now() WHERE id = $2`,
+        [requested.toISOString(), parsed.order_id],
+      );
+      // Compute eta from the customer's saved address zone; fall back to a
+      // flat 30 min if the customer hasn't saved a structured address yet.
+      const addr = await DeliveryService.getDefaultAddress(ctx.customerId);
+      const etaMinutes = addr
+        ? (await DeliveryService.getZone(addr.zone_id))?.eta_minutes ?? 30
+        : 30;
+      const eta = new Date(requested.getTime() + etaMinutes * 60 * 1000);
+      return JSON.stringify({
+        order_id: parsed.order_id,
+        requested_for: requested.toISOString(),
+        eta_minutes: etaMinutes,
+        eta_iso: eta.toISOString(),
       });
     },
   },
@@ -515,6 +917,16 @@ export async function runTool(
   args: Record<string, unknown>,
   ctx: AgentContext,
 ): Promise<string> {
+  // Feature flag gate: phase 2 tools throw a stable 'feature_disabled' error
+  // BEFORE the handler lookup, so callers don't see 'unknown_tool' for
+  // tools that exist in the registry but aren't enabled yet.
+  if (PHASE2_TOOLS.has(name) && !config.FEATURE_CUSTOMER_ORDER_PHASE2) {
+    throw new ToolError(
+      'feature_disabled',
+      'এই ফিচারটি এখন বন্ধ আছে।',
+      `tool ${name} is gated by FEATURE_CUSTOMER_ORDER_PHASE2`,
+    );
+  }
   const def = handlers[name];
   if (!def) {
     throw new ToolError('unknown_tool', 'টুল খুঁজে পাওয়া যায়নি।', `unknown tool: ${name}`);
@@ -533,6 +945,12 @@ export const _schemas = {
   CheckAvailabilitySchema,
   CancelOrderSchema,
   GetOrderStatusSchema,
+  GetDeliveryZonesSchema,
+  SetDeliveryAddressSchema,
+  GetOrderHistorySchema,
+  ReorderFromHistorySchema,
+  ModifyOrderSchema,
+  ScheduleOrderSchema,
 };
 
 export const _handlers = handlers;

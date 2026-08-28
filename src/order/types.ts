@@ -30,11 +30,13 @@ export interface Order {
   delivery_fee_paisa: number;
   total_paisa: number;
   delivery_address: string | null;
+  delivery_zone_id: string | null;
   payment_method: string | null;
   special_instructions: string | null;
   confirmed_at: string | null;
   cancelled_at: string | null;
   cancel_reason: string | null;
+  requested_for: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -46,6 +48,7 @@ export interface CreateOrderInput {
   items: OrderItemSnapshot[];
   delivery_fee_paisa: number;
   delivery_address?: string | null;
+  delivery_zone_id?: string | null;
   payment_method?: string | null;
   special_instructions?: string | null;
 }
@@ -58,6 +61,8 @@ export interface OrderHistoryRow {
   subtotal_paisa: number;
   delivery_fee_paisa: number;
   total_paisa: number;
+  delivery_zone_id: string | null;
+  requested_for: string | null;
   created_at: string;
   confirmed_at: string | null;
   delivered_at: string | null;

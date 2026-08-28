@@ -16,7 +16,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { closeDb } from '../db/client.js';
+import db, { closeDb } from '../db/client.js';
 import { closeRedis } from '../redis/client.js';
 import { seed } from '../db/seed.js';
 import { findOrCreateByPhone } from '../customer/service.js';
@@ -45,10 +45,10 @@ describe('tool handlers (integration)', () => {
     conversationId = conv.id;
   });
 
-  afterAll(async () => {
-    await closeDb();
-    await closeRedis();
-  });
+  // NOTE: closeDb/closeRedis is now invoked once at the file level (top-level
+  // afterAll below) so the second describe block ("phase 2 tools (gated)")
+  // still has a live connection. The earlier per-describe closeDb was a
+  // happy accident of having only one describe in this file.
 
   beforeEach(async () => {
     await ConversationService.clearCart(conversationId);
@@ -245,4 +245,100 @@ describe('tool handlers (integration)', () => {
       ),
     ).rejects.toThrow();
   });
+});
+
+// ============================================================================
+// Phase 2 tools (gated behind FEATURE_CUSTOMER_ORDER_PHASE2)
+//
+// The default test env sets FEATURE_CUSTOMER_ORDER_PHASE2=false (via config
+// schema default), so calling any phase2 tool should throw a stable
+// `feature_disabled` ToolError before the handler ever runs.
+//
+// We do NOT cover the "enabled" code path here because `config` is parsed
+// once at module load and the env flag cannot be flipped mid-suite without
+// vi.resetModules + dynamic re-import. See src/ai/tools.phase2.test.ts for
+// the enabled-case integration tests (run separately or with the flag set
+// before the process boots).
+// ============================================================================
+
+describe('phase 2 tools (gated)', () => {
+  let ids: Ids;
+  let restaurantId: string;
+  let customerId: string;
+  let conversationId: string;
+  const PHASE2_TEST_PHONE = '+8801712345701';
+
+  beforeAll(async () => {
+    if (!existsSync(idsPath)) await seed();
+    ids = JSON.parse(readFileSync(idsPath, 'utf8')) as Ids;
+    restaurantId = ids.restaurant['hungry_bird']!;
+    // Dedicated customer so this block's state doesn't collide with the
+    // existing "tool handlers" suite's +8801700008888.
+    const c = await findOrCreateByPhone(PHASE2_TEST_PHONE);
+    customerId = c.id;
+    const conv = await ConversationService.getOrCreate(customerId, restaurantId);
+    conversationId = conv.id;
+
+    // Clean slate — no leftover orders, addresses, mods, or notifications
+    // from a previous run of this block.
+    await db.query(`DELETE FROM order_status_notifications WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)`, [customerId]);
+    await db.query(`DELETE FROM order_modifications WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)`, [customerId]);
+    await db.query(`DELETE FROM orders WHERE customer_id = $1`, [customerId]);
+    await db.query(`DELETE FROM customer_addresses WHERE customer_id = $1`, [customerId]);
+  });
+
+  afterAll(async () => {
+    // Best-effort cleanup. Don't fail the suite if these run before closeDb.
+    try {
+      await db.query(`DELETE FROM order_status_notifications WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)`, [customerId]);
+      await db.query(`DELETE FROM order_modifications WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)`, [customerId]);
+      await db.query(`DELETE FROM orders WHERE customer_id = $1`, [customerId]);
+      await db.query(`DELETE FROM customer_addresses WHERE customer_id = $1`, [customerId]);
+    } catch {
+      // DB may already be closed by the earlier suite's afterAll — that's fine.
+    }
+  });
+
+  const PHASE2_NAMES = [
+    'get_delivery_zones',
+    'set_delivery_address',
+    'get_order_history',
+    'reorder_from_history',
+    'modify_order',
+    'schedule_order',
+  ] as const;
+
+  for (const name of PHASE2_NAMES) {
+    it(`${name}: throws feature_disabled when FEATURE_CUSTOMER_ORDER_PHASE2=false (default)`, async () => {
+      const ctx = { conversationId, customerId, restaurantId };
+      // Even with an obviously invalid payload, the gate must reject before
+      // any handler or schema parsing runs.
+      await expect(runTool(name, {}, ctx)).rejects.toMatchObject({
+        code: 'feature_disabled',
+      });
+    });
+  }
+
+  it('toolDefinitions includes the six new phase 2 tools', () => {
+    const names = toolDefinitions.map((t) => t.name);
+    for (const name of PHASE2_NAMES) {
+      expect(names).toContain(name);
+    }
+  });
+
+  it('non-phase2 tools are NOT gated by the feature flag', async () => {
+    // Sanity check: a normal tool (get_order_status) with no args should
+    // either succeed or hit a different error code, never feature_disabled.
+    // It will throw 'order_not_found' here because the customer has no orders.
+    await expect(
+      runTool('get_order_status', {}, { conversationId, customerId, restaurantId }),
+    ).rejects.not.toMatchObject({ code: 'feature_disabled' });
+  });
+});
+
+// File-level teardown — runs AFTER every describe (including the gated one)
+// so the second describe's beforeAll can still talk to the DB.
+afterAll(async () => {
+  await closeDb();
+  await closeRedis();
 });

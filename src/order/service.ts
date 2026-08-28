@@ -46,8 +46,8 @@ export async function confirm(input: CreateOrderInput): Promise<Order> {
       `INSERT INTO orders (
          id, restaurant_id, customer_id, conversation_id, state,
          items, subtotal_paisa, delivery_fee_paisa, total_paisa,
-         delivery_address, payment_method, special_instructions, confirmed_at
-       ) VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, now())`,
+         delivery_address, delivery_zone_id, payment_method, special_instructions, confirmed_at
+       ) VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12, now())`,
       [
         id,
         input.restaurant_id,
@@ -58,6 +58,7 @@ export async function confirm(input: CreateOrderInput): Promise<Order> {
         input.delivery_fee_paisa,
         total_paisa,
         input.delivery_address ?? null,
+        input.delivery_zone_id ?? null,
         input.payment_method ?? null,
         input.special_instructions ?? null,
       ],
@@ -90,18 +91,21 @@ export async function getById(id: string): Promise<Order> {
     delivery_fee_paisa: number;
     total_paisa: number;
     delivery_address: string | null;
+    delivery_zone_id: string | null;
     payment_method: string | null;
     special_instructions: string | null;
     confirmed_at: string | null;
     cancelled_at: string | null;
     cancel_reason: string | null;
+    requested_for: string | null;
     created_at: string;
     updated_at: string;
   }>(
     `SELECT id, restaurant_id, customer_id, conversation_id, state, items,
             subtotal_paisa, delivery_fee_paisa, total_paisa,
-            delivery_address, payment_method, special_instructions,
-            confirmed_at, cancelled_at, cancel_reason, created_at, updated_at
+            delivery_address, delivery_zone_id, payment_method, special_instructions,
+            confirmed_at, cancelled_at, cancel_reason, requested_for,
+            created_at, updated_at
      FROM orders WHERE id = $1`,
     [id],
   );
@@ -174,18 +178,21 @@ export async function listByCustomer(customerId: string): Promise<Order[]> {
     delivery_fee_paisa: number;
     total_paisa: number;
     delivery_address: string | null;
+    delivery_zone_id: string | null;
     payment_method: string | null;
     special_instructions: string | null;
     confirmed_at: string | null;
     cancelled_at: string | null;
     cancel_reason: string | null;
+    requested_for: string | null;
     created_at: string;
     updated_at: string;
   }>(
     `SELECT id, restaurant_id, customer_id, conversation_id, state, items,
             subtotal_paisa, delivery_fee_paisa, total_paisa,
-            delivery_address, payment_method, special_instructions,
-            confirmed_at, cancelled_at, cancel_reason, created_at, updated_at
+            delivery_address, delivery_zone_id, payment_method, special_instructions,
+            confirmed_at, cancelled_at, cancel_reason, requested_for,
+            created_at, updated_at
      FROM orders WHERE customer_id = $1 ORDER BY created_at DESC`,
     [customerId],
   );
@@ -230,6 +237,7 @@ export async function listHistoryByCustomer(
          0
        )::int AS item_count,
        o.subtotal_paisa, o.delivery_fee_paisa, o.total_paisa,
+       o.delivery_zone_id, o.requested_for,
        o.created_at, o.confirmed_at, o.delivered_at, o.cancelled_at
      FROM orders o
      WHERE ${where}
