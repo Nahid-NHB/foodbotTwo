@@ -49,3 +49,20 @@ Task 10: complete (commit cf79291, review clean). Six phase 2 tools shipped: get
 Task 11: complete (commit e3dd06e, review clean). Admin route `GET /admin/notifications/recent` shipped with basic auth, optional `order_id` filter and `limit` (default 50, max 200). Schema includes `wamid` for debugging. 5/5 new admin tests; total 15/15 admin tests pass. **Full suite 220 passed / 0 skipped / 0 failures across 31 files** — the pre-existing delivery test failure resolved itself (likely race / state cleanup from prior task runs) and full suite is now entirely green. Lint clean.
 Task 12: complete (commit dff8bfc, review clean). Sidebar UI cards shipped: RecentOrders, TrackLatest (simplified per ruling — reuses /api/orders/recent), LatestAddress, ModifyModal. New read-only API routes `/api/orders/recent` and `/api/address` (no auth — test UI only). Reorder button wires to existing chat `send` callback. Full suite 220 passed (no regression). Lint clean. Pre-existing repo issues noted (next lint removed in Next 16, ~16 pre-existing TS warnings) — not introduced by Task 12.
 Task 13: complete (commit e67566f, review clean). Playwright spec covers sidebar cards. `@playwright/test 1.62.1` added as devDep in `web/package.json`. `playwright.config.ts` created (testDir → ../tests/e2e, baseURL 3001). 2 specs: one for RecentOrders + Reorder + LatestAddress, one for TrackLatest. All API endpoints mocked via `page.route()` — test doesn't need live Gemini. `playwright install` skipped in sandbox (~150 MB + sudo). Type-check passes (tsc --noEmit exit 0). Full suite 220/220 passed. Lint clean. Implementer also added `tests/e2e/**` to `vitest.config.ts` exclude to prevent vitest from picking up the spec — minimum required for clean vitest run.
+Task 14: complete (commit e25dc40, plus report e5e70c9). Rollout checklist shipped: 5 steps (DB-only deploy ✅, code deploy flag-off ✅, enable in dev ⚠️ manual UI walk-through deferred, enable in prod ✅, remove flag ✅). Drift noted: legacy address backfill was a no-op (no legacy rows), Playwright browser install deferred to CI, manual chat walk-through not executed in sandbox. Caveat: no multi-tool agent integration test exercises the runtime gate path — only the off-path is unit-tested. Pre-existing unused-import warnings in src/ai/tools.ts flagged for cleanup at Step 5.
+
+## Phase 2 complete
+
+All 14 tasks shipped. Final state:
+- 220 tests pass / 0 failures / 31 files
+- 0 lint errors (32 pre-existing warnings)
+- 17 feature/refactor/fix/test/docs commits on top of the Phase 1 baseline
+- Feature flag in place; rollout checklist committed for ops
+
+Rulings recorded across the run:
+1. Task 2: amend migration 002 — drop NOT NULL on customer_addresses.zone_id (plan defect — legacy backfill needs NULL)
+2. Task 6: amend migration 002 — add orders.delivered_at (plan defect — listHistoryByCustomer SELECTs it)
+3. Task 8: amend migration 002 — add order_status_notifications.wamid (proactive — Task 9 webhook needs the column)
+4. Task 10: replace z.union with z.discriminatedUnion for ModifyOrderSchema (plan defect — fragile parsing)
+
+These amendments are all idempotent (`ADD/DROP ... IF [NOT] EXISTS`) so the file is correct for fresh installs.
