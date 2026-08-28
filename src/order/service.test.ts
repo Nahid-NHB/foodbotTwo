@@ -182,6 +182,42 @@ describe('order service (integration)', () => {
     );
   });
 
+  it('transition creates an order_status_notifications row for the new state', async () => {
+    // Use a dedicated customer/order pair so we don't collide with earlier tests'
+    // notification rows.
+    const c = await findOrCreateByPhone('+8801723456702');
+    const cid = c.id;
+    // Start clean for this customer.
+    await pool.query(
+      `DELETE FROM order_status_notifications WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)`,
+      [cid],
+    );
+    await pool.query(
+      `DELETE FROM order_events WHERE order_id IN (SELECT id FROM orders WHERE customer_id = $1)`,
+      [cid],
+    );
+    await pool.query(`DELETE FROM orders WHERE customer_id = $1`, [cid]);
+
+    const order = await confirm({
+      restaurant_id: restaurantId,
+      customer_id: cid,
+      items: [line()],
+      delivery_fee_paisa: 0,
+    });
+
+    await transition(order.id, 'confirmed', 'staff', 'ok');
+
+    // recordAndEnqueue is fire-and-forget; allow the microtask to settle.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const rows = await db.query<{ to_state: string }>(
+      `SELECT to_state FROM order_status_notifications WHERE order_id = $1`,
+      [order.id],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.to_state).toBe('confirmed');
+  });
+
   it('MenuItemUnavailableError is exported and typed', () => {
     const e = new MenuItemUnavailableError('Coke');
     expect(e.code).toBe('menu_item_unavailable');

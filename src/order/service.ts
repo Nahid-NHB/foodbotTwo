@@ -5,8 +5,10 @@ import {
   OrderNotFoundError,
 } from '../common/errors.js';
 import { sumPaisa } from '../common/money.js';
+import { logger } from '../logger.js';
 import { assertCanTransition } from './state.js';
 import { revalidateItems } from './menuRevalidator.js';
+import { recordAndEnqueue } from './notifications.js';
 import type { CreateOrderInput, Order, OrderState, OrderItemSnapshot, OrderHistoryRow, ListHistoryOptions } from './types.js';
 
 /**
@@ -149,7 +151,15 @@ export async function transition(
   } finally {
     client.release();
   }
-  return getById(orderId);
+  const updated = await getById(orderId);
+  // Fire-and-forget notification AFTER the transaction commits so a queue
+  // or DB hiccup doesn't roll back state. recordAndEnqueue is idempotent
+  // on (order_id, to_state), so a retry of transition for the same target
+  // won't produce duplicate WhatsApp messages.
+  void recordAndEnqueue(updated, to, note).catch((err) => {
+    logger.error({ err, orderId, to }, 'notification enqueue failed');
+  });
+  return updated;
 }
 
 export async function listByCustomer(customerId: string): Promise<Order[]> {

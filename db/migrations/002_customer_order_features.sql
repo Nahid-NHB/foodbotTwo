@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS order_status_notifications (
   failed_reason text,
   UNIQUE (order_id, to_state)
 );
+-- wamid: outbound message id from Meta. Set by the whatsapp.send worker
+-- after a successful sendText so the webhook (Task 9) can correlate a
+-- later 'delivered'/'failed' status update back to the right notification.
+ALTER TABLE order_status_notifications ADD COLUMN IF NOT EXISTS wamid text;
 
 CREATE TABLE IF NOT EXISTS order_modifications (
   id uuid PRIMARY KEY,

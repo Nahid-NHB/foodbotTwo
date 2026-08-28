@@ -51,6 +51,17 @@ export interface SendJobData {
   to: string;
   body: string;
   conversationId: string;
+  /**
+   * Kind of outbound message. `status` indicates a status notification job
+   * from OrderService.transition; the worker will call `markWamid` on the
+   * matching order_status_notifications row. Absent / `reply` (the
+   * conversationProcessor path) leaves existing behavior unchanged.
+   */
+  kind?: 'reply' | 'status';
+  /** Present when kind === 'status'. */
+  orderId?: string;
+  /** Present when kind === 'status'. */
+  toState?: string;
 }
 
 export const audioQueue = new Queue<TranscribeJobData>('audio.transcribe', {
@@ -172,8 +183,21 @@ const conversationProcessor: Processor<ConversationJobData> = async (job) => {
 };
 
 const sendProcessor: Processor<SendJobData> = async (job) => {
-  await sendText({ to: job.data.to, body: job.data.body });
-  return { sent: true };
+  const result = await sendText({ to: job.data.to, body: job.data.body });
+  // Status notifications: capture Meta's outbound message id on the
+  // matching order_status_notifications row so the webhook (Task 9) can
+  // correlate a later delivery/failure update back to it.
+  //
+  // NOTE: we do NOT set `delivered_at` here — that's set by the webhook
+  // when Meta confirms delivery to the customer's phone. Setting it at
+  // send time would lie about the customer's experience.
+  //
+  // Dynamic import to avoid a circular dep (queue → notifications → queue).
+  if (job.data.kind === 'status' && job.data.orderId && job.data.toState) {
+    const { markWamid } = await import('../order/notifications.js');
+    await markWamid(job.data.orderId, job.data.toState as never, result.wamid);
+  }
+  return { sent: true, wamid: result.wamid };
 };
 
 /**

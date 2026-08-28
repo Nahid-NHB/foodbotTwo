@@ -91,3 +91,27 @@ export type ApplyModificationResult = {
   order: Order;
   modification: OrderModification;
 };
+
+export type NotificationTemplate = {
+  to_state: OrderState;
+  bn: string;
+};
+
+export const NOTIFICATION_TEMPLATES: ReadonlyArray<NotificationTemplate> = [
+  { to_state: 'confirmed', bn: 'আপনার অর্ডার #{order_id_short} কনফার্ম হয়েছে। প্রস্তুতি শুরু হবে শীঘ্রই।' },
+  { to_state: 'preparing', bn: 'আপনার অর্ডার #{order_id_short} রান্না শুরু হয়েছে।' },
+  { to_state: 'ready', bn: 'আপনার অর্ডার #{order_id_short} প্রস্তুত।' },
+  { to_state: 'out_for_delivery', bn: 'আপনার অর্ডার #{order_id_short} ডেলিভারির জন্য বের হয়েছে।' },
+  { to_state: 'delivered', bn: 'আপনার অর্ডার #{order_id_short} পৌঁছে গেছে। ধন্যবাদ!' },
+  { to_state: 'cancelled', bn: 'আপনার অর্ডার #{order_id_short} বাতিল করা হয়েছে। কারণ: {note}' },
+];
+
+export interface OrderStatusNotification {
+  id: string;
+  order_id: string;
+  to_state: OrderState;
+  wamid: string | null;
+  sent_at: string;
+  delivered_at: string | null;
+  failed_reason: string | null;
+}
