@@ -20,11 +20,20 @@ interface WebhookMessage {
   audio?: { id: string; mime_type: string };
 }
 
+interface MessageStatusEntry {
+  id: string;          // wamid
+  status: 'sent' | 'delivered' | 'read' | 'failed';
+  timestamp: string;   // unix seconds (as Meta sends)
+  recipient_id: string;
+  errors?: Array<{ code: number; title: string; message?: string }>;
+}
+
 interface WebhookValue {
   messaging_product: string;
   metadata: { phone_number_id: string };
   contacts?: Array<{ profile: { name: string }; wa_id: string }>;
   messages?: WebhookMessage[];
+  statuses?: MessageStatusEntry[];
 }
 
 interface WebhookPayload {
@@ -111,7 +120,19 @@ export async function registerWebhook(app: any): Promise<void> {
       const reqId = (req as { id?: string }).id ?? '';
       for (const change of entry.changes ?? []) {
         const value = change.value;
-        if (!value || !value.messages) continue;
+        if (!value) continue;
+
+        // Outbound message status callbacks from Meta (sent/delivered/read/failed).
+        if (value.statuses && value.statuses.length > 0) {
+          for (const s of value.statuses) {
+            await handleMessageStatus(s).catch((err) => {
+              logger.error({ err, wamid: s.id, status: s.status }, 'failed to handle message status');
+            });
+          }
+          continue;  // skip the inbound messages loop for this change
+        }
+
+        if (!value.messages) continue;
         for (const m of value.messages) {
           await handleInbound(m, restaurant.id, reqId).catch((err) => {
             logger.error({ err, wamid: m.id, reqId }, 'failed to handle inbound message');
@@ -175,4 +196,33 @@ async function handleInbound(m: WebhookMessage, restaurantId: string, reqId: str
   }
 
   logger.info({ type: m.type, wamid: m.id, reqId }, 'unsupported message type');
+}
+
+/**
+ * Handle a Meta outbound message status callback (sent/delivered/read/failed).
+ * Looks up the matching `order_status_notifications` row by wamid and calls
+ * `markDelivered` or `markFailed` accordingly.
+ *
+ * Uses a dynamic import for `markDelivered`/`markFailed` to avoid a circular
+ * dep (webhook → notifications → queue, which is the dep graph).
+ *
+ * Status 'sent' is a no-op — `markWamid` already recorded the wamid at send time.
+ */
+async function handleMessageStatus(s: MessageStatusEntry): Promise<void> {
+  const { markDelivered, markFailed } = await import('../order/notifications.js');
+  const rows = await db.query<{ order_id: string; to_state: string }>(
+    `SELECT order_id, to_state FROM order_status_notifications WHERE wamid = $1`,
+    [s.id],
+  );
+  for (const r of rows) {
+    if (s.status === 'delivered' || s.status === 'read') {
+      // timestamp is unix seconds
+      const when = new Date(parseInt(s.timestamp, 10) * 1000);
+      await markDelivered(r.order_id, r.to_state as never, when);
+    } else if (s.status === 'failed') {
+      const reason = s.errors?.[0]?.message ?? 'unknown';
+      await markFailed(r.order_id, r.to_state as never, reason);
+    }
+    // 'sent' is informational — nothing to do (we already wrote wamid on send).
+  }
 }

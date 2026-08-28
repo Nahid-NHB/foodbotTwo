@@ -22,6 +22,9 @@ import { seed } from '../db/seed.js';
 import { buildApp } from '../index.js';
 import { sign } from './verify.js';
 import { config } from '../config.js';
+import { findOrCreateByPhone } from '../customer/service.js';
+import * as OrderService from '../order/service.js';
+import { newId } from '../common/id.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const idsPath = join(here, '..', '..', 'data', 'menu-ids.json');
@@ -186,5 +189,162 @@ describe('webhook router', () => {
       [wamid],
     );
     expect(rows).toHaveLength(1);
+  });
+
+  it('POST /webhook with a status=delivered payload marks the notification row delivered_at', async () => {
+    const ids = JSON.parse(readFileSync(idsPath, 'utf8')) as Ids;
+    const restaurantId = ids.restaurant['hungry_bird']!;
+    const itemId = ids.item['chicken_burger']!;
+
+    // Setup: create customer + order directly via OrderService.confirm.
+    const customer = await findOrCreateByPhone('+8801799887766');
+    const order = await OrderService.confirm({
+      restaurant_id: restaurantId,
+      customer_id: customer.id,
+      items: [
+        {
+          menu_item_id: itemId,
+          name: 'Chicken Burger',
+          quantity: 1,
+          unit_price_paisa: 18000,
+          addon_ids: [],
+          addons: [],
+          line_total_paisa: 18000,
+        },
+      ],
+      delivery_fee_paisa: 0,
+    });
+
+    const wamid = `wamid.test.delivered.${Date.now()}`;
+    await db.query(
+      `INSERT INTO order_status_notifications (id, order_id, to_state, wamid)
+       VALUES ($1, $2, 'confirmed', $3)`,
+      [newId(), order.id, wamid],
+    );
+
+    const body = {
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: { phone_number_id: restaurantPhoneNumberId },
+                statuses: [
+                  {
+                    id: wamid,
+                    status: 'delivered',
+                    timestamp: '1700000000',
+                    recipient_id: '8801799887766',
+                  },
+                ],
+              },
+              field: 'messages',
+            },
+          ],
+        },
+      ],
+    };
+    const raw = Buffer.from(JSON.stringify(body));
+    const signature = sign(raw, config.WHATSAPP_APP_SECRET);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhook',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': signature,
+      },
+      payload: raw,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await db.query<{ delivered_at: string | Date | null }>(
+      `SELECT delivered_at FROM order_status_notifications WHERE wamid = $1`,
+      [wamid],
+    );
+    expect(rows).toHaveLength(1);
+    // pg driver returns timestamptz as a Date; convert to ISO for comparison.
+    expect(new Date(rows[0]!.delivered_at as string).toISOString()).toBe('2023-11-14T22:13:20.000Z');
+  });
+
+  it('POST /webhook with a status=failed payload sets failed_reason', async () => {
+    const ids = JSON.parse(readFileSync(idsPath, 'utf8')) as Ids;
+    const restaurantId = ids.restaurant['hungry_bird']!;
+    const itemId = ids.item['chicken_burger']!;
+
+    const customer = await findOrCreateByPhone('+8801799887755');
+    const order = await OrderService.confirm({
+      restaurant_id: restaurantId,
+      customer_id: customer.id,
+      items: [
+        {
+          menu_item_id: itemId,
+          name: 'Chicken Burger',
+          quantity: 1,
+          unit_price_paisa: 18000,
+          addon_ids: [],
+          addons: [],
+          line_total_paisa: 18000,
+        },
+      ],
+      delivery_fee_paisa: 0,
+    });
+
+    const wamid = `wamid.test.failed.${Date.now()}`;
+    await db.query(
+      `INSERT INTO order_status_notifications (id, order_id, to_state, wamid)
+       VALUES ($1, $2, 'confirmed', $3)`,
+      [newId(), order.id, wamid],
+    );
+
+    const body = {
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: { phone_number_id: restaurantPhoneNumberId },
+                statuses: [
+                  {
+                    id: wamid,
+                    status: 'failed',
+                    timestamp: '1700000000',
+                    recipient_id: '8801799887755',
+                    errors: [
+                      { code: 131047, title: 'Re-engagement', message: 'rate limit' },
+                    ],
+                  },
+                ],
+              },
+              field: 'messages',
+            },
+          ],
+        },
+      ],
+    };
+    const raw = Buffer.from(JSON.stringify(body));
+    const signature = sign(raw, config.WHATSAPP_APP_SECRET);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhook',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': signature,
+      },
+      payload: raw,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await db.query<{ failed_reason: string | null }>(
+      `SELECT failed_reason FROM order_status_notifications WHERE wamid = $1`,
+      [wamid],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.failed_reason).toBe('rate limit');
   });
 });
