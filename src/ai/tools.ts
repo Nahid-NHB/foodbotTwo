@@ -10,7 +10,7 @@ import * as OrderModificationService from '../order/modifications.js';
 import db from '../db/client.js';
 import { revalidateItems } from '../order/menuRevalidator.js';
 import { formatBDT } from '../common/money.js';
-import { MenuItemNotFoundError, ToolError } from '../common/errors.js';
+import { ToolError } from '../common/errors.js';
 import { config } from '../config.js';
 import type { CartItem } from '../cart/types.js';
 
@@ -161,7 +161,6 @@ export type ToolHandler = (
 function summaryText(
   cart: CartItem[],
   deliveryFee: number,
-  restaurantName: string,
 ): string {
   const subtotal = cart.reduce((s, i) => s + i.line_total_paisa, 0);
   const total = subtotal + deliveryFee;
@@ -539,7 +538,7 @@ const handlers: Record<string, { schema: z.ZodTypeAny; fn: ToolHandler }> = {
         ? (await DeliveryService.getZone(addr.zone_id))?.delivery_fee_paisa ??
           config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA
         : config.RESTAURANT_DEFAULT_DELIVERY_FEE_PAISA;
-      const text = summaryText(items, fee, config.RESTAURANT_NAME);
+      const text = summaryText(items, fee);
       await ConversationService.transitionTo(ctx.conversationId, 'awaiting_confirmation');
       return JSON.stringify({ summary: text });
     },
