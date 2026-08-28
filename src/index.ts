@@ -7,6 +7,7 @@ import { redis } from './redis/client.js';
 import { registerWebhook } from './webhook/router.js';
 import { registerChatRoute } from './web/chatRoute.js';
 import { registerAdminRoutes } from './admin/dlq.js';
+import { registerNotificationRoutes } from './admin/notifications.js';
 import { requestIdHook } from './middleware/requestId.js';
 import { buildRateLimitHook } from './middleware/wireRateLimit.js';
 import { readWorkerHeartbeats } from './middleware/workerHeartbeat.js';
@@ -132,6 +133,7 @@ async function buildAppRaw() {
   await registerWebhook(app as never);
   await registerChatRoute(app as never);
   await registerAdminRoutes(app as never);
+  await registerNotificationRoutes(app as never);
 
   return app;
 }
