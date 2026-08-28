@@ -66,3 +66,7 @@ Rulings recorded across the run:
 4. Task 10: replace z.union with z.discriminatedUnion for ModifyOrderSchema (plan defect — fragile parsing)
 
 These amendments are all idempotent (`ADD/DROP ... IF [NOT] EXISTS`) so the file is correct for fresh installs.
+
+## Post-Phase 2 cleanup
+
+Commit `1faf647` — `chore: drop unused MenuItemNotFoundError import + restaurantName param`. Addressed the 2 lint warnings in `src/ai/tools.ts` that Task 14 flagged. `MenuItemNotFoundError` was imported but never referenced; `summaryText` accepted a `restaurantName` parameter that was never used in its body. Lint warnings dropped from 32 → 30 (still 0 errors); 220/220 tests pass. No behavioral change.
