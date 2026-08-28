@@ -39,6 +39,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { detectQuickReplies, type QuickReply } from "@/lib/quickReplies";
 import { Markdown } from "@/lib/markdown";
 import { cn, formatBDT } from "@/lib/utils";
+import { LatestAddress } from "@/components/LatestAddress";
+import { RecentOrders } from "@/components/RecentOrders";
+import { TrackLatest } from "@/components/TrackLatest";
+import { ModifyModal, type ModifyItem } from "@/components/ModifyModal";
 
 // ---------- types ----------
 
@@ -128,6 +132,32 @@ function isToolErrorResult(result: string): boolean {
   return false;
 }
 
+/**
+ * Try to extract an order id from a tool-call result. Used so the
+ * `TrackLatest` card can lock onto the order that the agent just looked up.
+ * Looks for an `id` field either at the root, in `order`, or in the first
+ * element of `orders`.
+ */
+function extractOrderIdFromResult(result: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (!parsed || typeof parsed !== "object") return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj["id"] === "string") return obj["id"];
+    if (obj["order"] && typeof obj["order"] === "object") {
+      const inner = obj["order"] as Record<string, unknown>;
+      if (typeof inner["id"] === "string") return inner["id"];
+    }
+    if (Array.isArray(obj["orders"]) && obj["orders"].length > 0) {
+      const first = obj["orders"][0] as Record<string, unknown> | undefined;
+      if (first && typeof first["id"] === "string") return first["id"];
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 type ConnStatus = "idle" | "sending" | "error";
 
 export function ChatPage() {
@@ -137,6 +167,9 @@ export function ChatPage() {
   const [sending, setSending] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
+  const [latestOrderId, setLatestOrderId] = useState<string | null>(null);
+  const [modifyOpen, setModifyOpen] = useState(false);
+  const [modifyItems, setModifyItems] = useState<ModifyItem[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Restore from localStorage on mount (per-browser).
@@ -209,6 +242,16 @@ export function ChatPage() {
               : msg,
           ),
         );
+
+        // If the agent just looked up an order, lock the TrackLatest card
+        // onto it. Prefer get_order_status; fall back to get_order_history.
+        for (const tc of data.toolCalls) {
+          const id = extractOrderIdFromResult(tc.result);
+          if (id && (tc.name === "get_order_status" || tc.name === "get_order_history")) {
+            setLatestOrderId(id);
+            break;
+          }
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setLastError(message);
@@ -247,6 +290,57 @@ export function ChatPage() {
     setMessages([]);
     setLastError(null);
   }
+
+  // Reorder — fire a Bangla message into the existing chat input. The agent
+  // handles `get_order_history` lookup + cart re-population.
+  const handleReorder = useCallback(
+    (orderId: string) => {
+      void send(`আগেরটাই আবার দিন #${orderId}`);
+    },
+    [send],
+  );
+
+  // Open the modify modal pre-populated with the current cart lines. The
+  // cart carries enough info (name, quantity, line_total) but no menu_item_id,
+  // so we derive a stable pseudo-id from the name. The agent's actual
+  // modify_order tool matches by name, so this is safe for the UI demo.
+  function openModify() {
+    if (latestCart.length === 0) return;
+    setModifyItems(
+      latestCart.map((line, idx) => {
+        const unitPaisa = line.quantity > 0 ? Math.round(line.line_total_paisa / line.quantity) : 0;
+        return {
+          menu_item_id: line.name || `item-${idx}`,
+          name: line.name,
+          quantity: line.quantity,
+          unit_price_paisa: unitPaisa,
+        };
+      }),
+    );
+    setModifyOpen(true);
+  }
+
+  // Apply the modify modal — turn the edited items into a Bangla message
+  // and post it. Quantities of 0 become "বাদ দিন" (remove).
+  const handleApplyModify = useCallback(
+    (items: { menu_item_id: string; quantity: number }[]) => {
+      const lines = items
+        .map((i) => {
+          const original = modifyItems.find((m) => m.menu_item_id === i.menu_item_id);
+          if (!original) return null;
+          if (i.quantity === 0) return `${original.name} বাদ দিন`;
+          if (i.quantity !== original.quantity) {
+            return `${original.name} ${original.quantity} থেকে ${i.quantity} করুন`;
+          }
+          return null;
+        })
+        .filter((s): s is string => Boolean(s));
+      setModifyOpen(false);
+      if (lines.length === 0) return;
+      void send(lines.join(", "));
+    },
+    [modifyItems, send],
+  );
 
   // Pick the latest cart snapshot from the most recent agent message.
   const latestCart = useMemo(() => {
@@ -387,8 +481,11 @@ export function ChatPage() {
       </div>
 
       {/* Desktop sidebar */}
-      <aside className="hidden flex-col gap-4 border-l border-[var(--color-border)] bg-[var(--color-muted)]/30 p-4 lg:flex">
-        <CartPanel cart={latestCart} totalPaisa={cartTotal} />
+      <aside className="hidden flex-col gap-4 overflow-y-auto border-l border-[var(--color-border)] bg-[var(--color-muted)]/30 p-4 lg:flex">
+        <LatestAddress phone={phone} />
+        <TrackLatest phone={phone} orderId={latestOrderId} />
+        <RecentOrders phone={phone} onReorder={handleReorder} />
+        <CartPanel cart={latestCart} totalPaisa={cartTotal} onModify={openModify} />
         <ToolCallsPanel calls={allToolCalls} />
       </aside>
 
@@ -418,11 +515,21 @@ export function ChatPage() {
                 <X className="h-4 w-4" />
               </Button>
             </div>
-            <CartPanel cart={latestCart} totalPaisa={cartTotal} />
+            <LatestAddress phone={phone} />
+            <TrackLatest phone={phone} orderId={latestOrderId} />
+            <RecentOrders phone={phone} onReorder={handleReorder} />
+            <CartPanel cart={latestCart} totalPaisa={cartTotal} onModify={openModify} />
             <ToolCallsPanel calls={allToolCalls} />
           </div>
         </div>
       )}
+
+      <ModifyModal
+        open={modifyOpen}
+        onClose={() => setModifyOpen(false)}
+        items={modifyItems}
+        onApply={handleApplyModify}
+      />
     </div>
   );
 }
@@ -642,7 +749,15 @@ function ToolCallEntry({
   );
 }
 
-function CartPanel({ cart, totalPaisa }: { cart: CartItem[]; totalPaisa: number }) {
+function CartPanel({
+  cart,
+  totalPaisa,
+  onModify,
+}: {
+  cart: CartItem[];
+  totalPaisa: number;
+  onModify?: () => void;
+}) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -650,12 +765,25 @@ function CartPanel({ cart, totalPaisa }: { cart: CartItem[]; totalPaisa: number 
           <ShoppingCart className="h-4 w-4" />
           <CardTitle>Cart</CardTitle>
         </div>
-        {cart.length > 0 && (
-          <Badge>
-            {cart.reduce((s, l) => s + l.quantity, 0)} item
-            {cart.reduce((s, l) => s + l.quantity, 0) === 1 ? "" : "s"}
-          </Badge>
-        )}
+        <div className="flex items-center gap-1.5">
+          {cart.length > 0 && onModify && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onModify}
+              aria-label="open modify modal"
+              title="Edit quantities"
+            >
+              Modify
+            </Button>
+          )}
+          {cart.length > 0 && (
+            <Badge>
+              {cart.reduce((s, l) => s + l.quantity, 0)} item
+              {cart.reduce((s, l) => s + l.quantity, 0) === 1 ? "" : "s"}
+            </Badge>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         {cart.length === 0 ? (
